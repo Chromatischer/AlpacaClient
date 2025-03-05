@@ -1,5 +1,4 @@
-import json
-from typing import List, AsyncIterator
+from typing import List
 
 import ollama
 from ollama import *
@@ -123,12 +122,11 @@ class Alpacca:
             raise Exception("History is not enabled")
 
     async def generate_async(self, prompt):
-        client_async = ollama.AsyncClient()
         Logger.log(f"Generating Async Response using Alpacca model: {self.model}", Priority.NORMAL)
         user_question = prompt
         context = self.use_history and history_string(self.history) or ""
         system_prompt = self.use_system and self.system_prompt or ""
         prompt += f"\n{context}"
         Logger.log(f"Prompt: {prompt}", Priority.DEBUG)
-        iterator: AsyncIterator[ChatResponse] = await client_async.generate(model=self.model, options=self.options, prompt=prompt, system=system_prompt, stream=True)
+        iterator = await ollama.AsyncClient().generate(model=self.model, options=self.options, prompt=prompt, system=system_prompt, stream=True)
         return iterator
