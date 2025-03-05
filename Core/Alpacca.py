@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Iterator
 
 import ollama
 from ollama import *
@@ -129,4 +129,14 @@ class Alpacca:
         prompt += f"\n{context}"
         Logger.log(f"Prompt: {prompt}", Priority.DEBUG)
         iterator = await ollama.AsyncClient().generate(model=self.model, options=self.options, prompt=prompt, system=system_prompt, stream=True)
+        return iterator
+
+    def generate_iterable(self, prompt):
+        Logger.log(f"Generating Iteratable Response using Alpacca model: {self.model}", Priority.NORMAL)
+        user_question = prompt
+        context = self.use_history and history_string(self.history) or ""
+        system_prompt = self.use_system and self.system_prompt or ""
+        prompt += f"\n{context}"
+        Logger.log(f"Prompt: {prompt}", Priority.DEBUG)
+        iterator:  GenerateResponse | Iterator[GenerateResponse] = ollama.Client().generate(model=self.model, options=self.options, prompt=prompt, system=system_prompt, stream=True)
         return iterator
