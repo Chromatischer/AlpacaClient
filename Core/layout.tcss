@@ -1,0 +1,13 @@
+Screen {
+    layout: grid;
+    grid-size: 3;
+}
+#large {
+    column-span: 2;
+    row-span: 2;
+}
+.box {
+    height: 100%;
+    width: 1fr;
+    border: solid green;
+}
