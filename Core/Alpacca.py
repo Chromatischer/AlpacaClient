@@ -164,3 +164,13 @@ class Alpacca:
         else:
             Logger.log("History is not enabled", Priority.CRITICAL)
             raise Exception("History is not enabled")
+
+    def enable_load_history(self, history_location) -> bool:
+        """
+        Enable loading history from a file
+        :param history_location: The location of the history file
+        :return: True if history was loaded
+        """
+        self.history = [chat_exchange_from_dict(d) for d in load_json(history_location, create=True)]
+        self.use_history = True
+        return True

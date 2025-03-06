@@ -55,5 +55,10 @@ Markdown {
     /*width: 100%;*/
 }
 #button-add{
-    width: 5%;
+    min-width: 5%;
+    margin: 0;
+    padding: 0;
+    max-width: 10%;
+    text-style: bold;
+    background: #fe6262;
 }

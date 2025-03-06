@@ -1,21 +1,21 @@
-import asyncio
-import threading
-from typing import Coroutine, AsyncIterator, Any, Iterator, List
+import os
+from typing import Iterator, List
 
 from ollama import GenerateResponse
 from textual import work, on
 from textual.app import App, ComposeResult
-from textual.containers import Container, VerticalScroll, Center
+from textual.containers import Container, VerticalScroll
 from textual.message import Message
 from textual.reactive import reactive, Reactive
-from textual.widgets import Static, Button, Input, Log, Markdown
-from textual.worker import get_current_worker
+from textual.widgets import Static, Button, Input, Log, Markdown, Tabs
 
 from Core.Alpacca import Alpacca, separate_thoughts
 
 text = "Test text \n\n\n text Test\n"
 
 alpaca = Alpacca(model="phi4", history_location="history.json")
+models: List[Alpacca] = [Alpacca(model="phi4")]
+
 
 class UserMessage(Message):
     user: str
@@ -23,6 +23,7 @@ class UserMessage(Message):
     def __init__(self, user: str):
         self.user = user
         super().__init__()
+
 
 class AIResponse(Message):
     response: str
@@ -46,6 +47,7 @@ class ChatMessage(Message):
 
     def __str__(self):
         return f"You: {self.user}\n\nAlpacca: {self.response}"
+
 
 class AiChat(Static):
     lines: Reactive[ChatMessage] = reactive(list, recompose=True)
@@ -105,19 +107,46 @@ class AiChat(Static):
         self.new_line(message.user)
         self.change_happened()
 
+
+class ChatHistory(Tabs):
+    log: Log = None
+    history_files: List[str] = []
+    std_loc:str = "/Resources/Chats"
+
+    def __init__(self, logger: Log):
+        self.log = logger
+        history_files = [name for name in os.listdir(os.getcwd() + self.std_loc) if os.path.isfile(f"{os.getcwd() + self.std_loc}/{name}")]
+        self.history_files = history_files
+        super().__init__()
+
+    def compose(self) -> ComposeResult:
+        yield Tabs(self.history_files[0])
+
+    def on_mount(self):
+        for string in os.listdir(os.getcwd() + "/Resources/Chats/"):
+            self.log.write_line(string)
+            self.log.write_line(str(os.path.isfile(f"{os.getcwd() + self.std_loc}/{string}")))
+        for i in range(1, len(self.history_files)):
+            self.log.write_line(f"Found history: {self.history_files[i]}")
+            self.query_one(Tabs).add_tab(self.history_files[i])
+
+
 class TextualConsole(App):
-    CSS_PATH = "layout.tcss"
+    CSS_PATH = "Core/layout.tcss"
     style_logger = Log()
     chat = AiChat(style_logger)
 
     def compose(self) -> ComposeResult:
         with Container(id="app-grid"):
             with Container(id="main-window"):
+                yield ChatHistory(self.style_logger)
+                #yield Tabs("Hello")
                 with VerticalScroll(id="vertical-scroll-content"):
                     yield self.chat
                 with Container(id="side-by-side"):
-                    yield Button("+", id="button-add", disabled=True)
-                    yield Input(placeholder="Chat with AI: ", type="text", tooltip="Type your message here", id="chat-input")
+                    yield Button("+", id="button-add")
+                    yield Input(placeholder="Chat with AI: ", type="text", tooltip="Type your message here",
+                                id="chat-input")
                     yield Button("Send", id="send-button")
             with Container(id="side-window"):
                 yield Static("Second", classes="debug")
@@ -129,6 +158,7 @@ class TextualConsole(App):
         log.write_line("Mount Complete!")
         log.write_line("Started the Alpacca")
         # self.ai_content = "Hello World!"
+        #self.query_one(Tabs).focus()
 
     def _on_exit_app(self) -> None:
         alpaca.save_history()
@@ -162,6 +192,7 @@ class TextualConsole(App):
             # print(part)
             # print(str(part["response"]))
             self.chat.post_message(AIResponse(part["response"]))
+
 
 if __name__ == "__main__":
     app = TextualConsole()
