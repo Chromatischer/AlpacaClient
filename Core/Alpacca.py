@@ -122,6 +122,12 @@ class Alpacca:
             raise Exception("History is not enabled")
 
     async def generate_async(self, prompt):
+        """
+        Currently broken smh
+        Generate an async response from the model based on the prompt, system prompt and provided history
+        :param prompt: The prompt to generate a response from
+        :return: Coroutine that generates the response from the model
+        """
         Logger.log(f"Generating Async Response using Alpacca model: {self.model}", Priority.NORMAL)
         user_question = prompt
         context = self.use_history and history_string(self.history) or ""
@@ -132,6 +138,11 @@ class Alpacca:
         return iterator
 
     def generate_iterable(self, prompt):
+        """
+        Generate an iterable response from the model based on the prompt, system prompt and provided history
+        :param prompt: The prompt to generate a response from
+        :return: An iterable that generates the response from the model
+        """
         Logger.log(f"Generating Iteratable Response using Alpacca model: {self.model}", Priority.NORMAL)
         user_question = prompt
         context = self.use_history and history_string(self.history) or ""
@@ -140,3 +151,16 @@ class Alpacca:
         Logger.log(f"Prompt: {prompt}", Priority.DEBUG)
         iterator:  GenerateResponse | Iterator[GenerateResponse] = ollama.Client().generate(model=self.model, options=self.options, prompt=prompt, system=system_prompt, stream=True)
         return iterator
+
+    def add_history(self, user: str, thoughts: str, answer: str):
+        """
+        Add a chat exchange to the history
+        :param user: The user input prompt
+        :param thoughts: The thoughts of the model
+        :param answer: The answer of the model
+        """
+        if self.use_history:
+            self.history.append(ChatExchange(user, thoughts, answer))
+        else:
+            Logger.log("History is not enabled", Priority.CRITICAL)
+            raise Exception("History is not enabled")

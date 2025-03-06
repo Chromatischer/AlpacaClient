@@ -8,14 +8,14 @@ from textual.app import App, ComposeResult
 from textual.containers import Container, VerticalScroll, Center
 from textual.message import Message
 from textual.reactive import reactive, Reactive
-from textual.widgets import Static, Button, Input, Log
+from textual.widgets import Static, Button, Input, Log, Markdown
 from textual.worker import get_current_worker
 
-from Core.Alpacca import Alpacca
+from Core.Alpacca import Alpacca, separate_thoughts
 
 text = "Test text \n\n\n text Test\n"
 
-alpaca = Alpacca(model="phi4")
+alpaca = Alpacca(model="phi4", history_location="history.json")
 
 class UserMessage(Message):
     user: str
@@ -45,7 +45,7 @@ class ChatMessage(Message):
         self.response += part
 
     def __str__(self):
-        return f"You: {self.user}\nAlpacca: {self.response}"
+        return f"You: {self.user}\n\nAlpacca: {self.response}"
 
 class AiChat(Static):
     lines: Reactive[ChatMessage] = reactive(list, recompose=True)
@@ -60,13 +60,13 @@ class AiChat(Static):
 
     def compose(self) -> ComposeResult:
         if self.current_line is None:
-            yield Static("Chat with AI", classes="body")
+            yield Markdown("Chat with AI", classes="body")
         else:
             # self.log.write_line(str(self.current_line))
             content = "\n".join(str(m) for m in self.lines)
             # self.log.write_line(content)
             content += "\n" + str(self.current_line)
-            yield Static(f"{content}", classes="body")
+            yield Markdown(f"{content}", classes="body")
 
     def on_mount(self):
         pass
@@ -76,7 +76,7 @@ class AiChat(Static):
         Start a new chat exchange between the user and the AI
         :param user: The user input prompt that started the chat exchange
         """
-        self.log.write_line("New Chat exchange with user: " + user)
+        self.log.write_line(f"New Chat exchange with user: {user} scheduled!")
         if self.current_line is not None:
             self.lines.append(self.current_line)
             self.log.write_line("Old line: " + str(self.current_line.user) + " saved")
@@ -116,6 +116,7 @@ class TextualConsole(App):
                 with VerticalScroll(id="vertical-scroll-content"):
                     yield self.chat
                 with Container(id="side-by-side"):
+                    yield Button("+", id="button-add", disabled=True)
                     yield Input(placeholder="Chat with AI: ", type="text", tooltip="Type your message here", id="chat-input")
                     yield Button("Send", id="send-button")
             with Container(id="side-window"):
@@ -129,24 +130,38 @@ class TextualConsole(App):
         log.write_line("Started the Alpacca")
         # self.ai_content = "Hello World!"
 
+    def _on_exit_app(self) -> None:
+        alpaca.save_history()
+        self.style_logger.write_line("Alpacca: Saved Chat history!")
+        print(f"Saved history!")
+
     def on_button_pressed(self, event: Button.Pressed):
         if event.button.id == "send-button":
             self.generate_ai(self.query_one(Input).value)
             self.chat.post_message(UserMessage(self.query_one(Input).value))
+            self.query_one(Input).clear()
 
     def on_input_submitted(self, event: Input.Submitted):
         self.style_logger.write_line("Input Submitted: " + event.value)
         self.generate_ai(event.value)
         self.chat.post_message(UserMessage(event.value))
+        self.query_one(Input).clear()
+        # self.recompose()
 
     @work(thread=True)
     def generate_ai(self, prompt):
         self.style_logger.write_line(f"Generating AI: {prompt}")
+        if self.chat.current_line is not None:
+            self.style_logger.write_line(f"Saving old line and adding it to the alpacca's history!")
+            separated = separate_thoughts(self.chat.current_line.response)
+            self.style_logger.write_line(f"Old line: {self.chat.current_line}")
+            alpaca.add_history(self.chat.current_line.user, separated["think"], separated["response"])
+            self.style_logger.write_line(f"Added old line to the alpacca history!")
+
         for part in alpaca.generate_iterable(prompt):
             # print(part)
             # print(str(part["response"]))
             self.chat.post_message(AIResponse(part["response"]))
-
 
 if __name__ == "__main__":
     app = TextualConsole()

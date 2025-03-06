@@ -5,7 +5,7 @@
 }
 #main-window {
     layout: vertical;
-    border: solid blue;
+    /*border: solid blue;*/
 }
 #side-window {
     layout: vertical;
@@ -49,4 +49,11 @@ Input {
 }
 Log {
     height: 1fr;
+}
+Markdown {
+    height: 1fr;
+    /*width: 100%;*/
+}
+#button-add{
+    width: 5%;
 }
