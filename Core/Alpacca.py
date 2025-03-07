@@ -66,10 +66,11 @@ class Alpacca:
     history_location: str # The location of the history file
     context: [[int]] = [] # The context of the conversation
 
-    def __init__(self, model: str, previous_history: [ChatExchange] = None, temperature: float = 1, frequency_penalty: float = 0, stop: [str] = None, system: str = None, history_location: str = None):
+    def __init__(self, model: str, previous_history: [ChatExchange] = None, temperature: float = 1, frequency_penalty: float = 0, stop: [str] = None, system: str = None, history_location: str = None, identifier: str = None):
         self.model = model # The model to use
         self.history = previous_history
         self.history_location = history_location
+        self.identifier = identifier
         self.client = Client()
         self.stop = stop
         self.options = {"temperature": temperature, "frequency_penalty": frequency_penalty, "stop": stop}
@@ -80,7 +81,10 @@ class Alpacca:
             self.use_system = False
 
         if history_location or previous_history:
-            self.history = [chat_exchange_from_dict(d) for d in load_json(history_location, create=True)]
+            try:
+                self.history = [chat_exchange_from_dict(d) for d in load_json(history_location, create=True)]
+            except FileNotFoundError:
+                self.history = []
             self.use_history = True
         else:
             self.use_history = False
@@ -137,7 +141,8 @@ class Alpacca:
             "frequency_penalty": self.options["frequency_penalty"],
             "stop": self.options["stop"],
             "system": self.system_prompt if self.use_system else "Disabled",
-            "history": self.history_location if self.use_history else "Disabled"
+            "history": self.history_location if self.use_history else "Disabled",
+            "identifier": self.identifier
         }
 
     def generate_name(self):
@@ -208,5 +213,9 @@ def load_alpacca_from_json(location:str) -> Alpacca:
     data = load_json(location)
     system = data["system"] if data["system"] != "Disabled" else None
     history = data["history"] if data["history"] != "Disabled" else None
-    return Alpacca(data["model"], temperature=data["temperature"], frequency_penalty=data["frequency_penalty"], stop=data["stop"], system=system, history_location=history)
+    temperature = data["temperature"] if data["temperature"] else None
+    frequency_penalty = data["frequency_penalty"] if data["frequency_penalty"] else None
+    stop = data["stop"] if data["stop"] else None
+    identifier = data["identifier"] if data["identifier"] else None
+    return Alpacca(data["model"], temperature=temperature, frequency_penalty=frequency_penalty, stop=stop, system=system, history_location=history, identifier=identifier)
 

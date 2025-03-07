@@ -30,5 +30,8 @@ def load_json(path: str, create: bool = False) -> dict:
 def save_json(data: any, path: str):
     Logger.log(f"Saving file {path}", priority=NORMAL)
     # Logger.log(f"Data: {data}", priority=DEBUG)
+    if not os.path.exists(os.path.dirname(path)):
+        Logger.log(f"Creating directory {os.path.dirname(path)}", priority=NORMAL)
+        os.makedirs(os.path.dirname(path))
     with open(path, "w") as f:
         json.dump(data, f, indent=4)
