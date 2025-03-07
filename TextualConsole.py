@@ -48,20 +48,22 @@ class ChatMessage(Message):
         return f"You: {self.user}\n\nAlpacca: {self.response}\n"
 
 class AiChat(Static):
-    lines: Reactive[ChatMessage] = reactive(list, recompose=True)
+    lines: Reactive[ChatMessage] = []
     current_line: ChatMessage = None
     log: Log = None
     generation: GenerateResponse | Iterator[GenerateResponse] = None
     identifier: str = ""
 
-    def __init__(self, log, identifier: str = "Def"):
+    def __init__(self, log, identifier: str = "Def", load_from: Alpacca = None):
         self.update_timer = None
         self.log = log
         self.identifier = identifier
+        if load_from is not None:
+            self.load_from_alpacca(load_from)
         super().__init__()
 
     def compose(self) -> ComposeResult:
-        if self.current_line is None:
+        if self.current_line is None and len(self.lines) == 0:
             yield Markdown(f"Chat with AI: {self.identifier}", classes="body")
         else:
             # self.log.write_line(str(self.current_line))
@@ -90,7 +92,7 @@ class AiChat(Static):
         self.log.write_line(f"current_line now reset!")
 
     def change_happened(self):
-        self.mutate_reactive(AiChat.lines)
+        self.recompose()
 
     @on(AIResponse)
     def on_ai_response(self, message: AIResponse):
@@ -113,6 +115,16 @@ class AiChat(Static):
         self.log.write_line(f"User message: {message.user} post received!")
         self.new_line(message.user)
         self.change_happened()
+
+    def load_from_alpacca(self, alpacca: Alpacca):
+        """
+        Load the chat history from an alpacca
+        :param alpacca: The alpacca to load the history from
+        """
+        for exchange in alpacca.history:
+            message = ChatMessage(exchange.user)
+            message.add_part(f"{exchange.thoughts}\n{exchange.answer}")
+            self.lines.append(message)
 
 class CreateModelMessage(Message):
     def __init__(self, model: str):
@@ -185,7 +197,14 @@ class TextualConsole(App):
         print("Initializing Textual Console")
         self.alpacas, self.files = self.load_alpacca_models()
         for alpaca in self.alpacas:
-            self.chats.append(AiChat(log=self.style_logger, identifier=alpaca.identifier))
+            self.chats.append(AiChat(log=self.style_logger, identifier=alpaca.identifier, load_from=alpaca))
+
+        if len(self.alpacas) == 0:
+            print("No alpacas found: Creating default alpacca")
+            self.alpacas.append(self.create_default_alpacca())
+            self.chats.append(AiChat(log=self.style_logger, identifier=self.alpacas[0].identifier))
+        else:
+            print("Alpaca found")
         super().__init__()
 
     def compose(self) -> ComposeResult:
@@ -239,13 +258,17 @@ class TextualConsole(App):
 
     @on(CreateModelMessage)
     def on_create_model(self, event: CreateModelMessage):
-        random_id = floor(random() * 99)
-        model_str = event.model.split(":")[0].replace("/", "_")
-        self.alpacas.append(Alpacca(event.model, history_location=f"{os.getcwd() + self.std_loc}/{model_str}{random_id}.json", identifier=f"{model_str}{random_id}"))
-        self.chats.append(AiChat(log=self.style_logger, identifier=f"{model_str}{random_id}"))
-        self.query_one(ChatHistory).add_tab(Tab(f"{model_str}:{random_id}", id=f"tab-{len(self.chats) - 1}"), before="add-tab")
+        model_str = make_to_model_str(event.model)
+        self.alpacas.append(Alpacca(event.model, history_location=f"{os.getcwd() + self.std_loc}/{model_str}.json", identifier=f"{model_str}"))
+        self.chats.append(AiChat(log=self.style_logger, identifier=f"{model_str}"))
+        self.query_one(ChatHistory).add_tab(Tab(f"{model_str}", id=f"tab-{len(self.chats) - 1}"), before="add-tab")
         self.recompose()
         self.query_one(ChatHistory).action_previous_tab()
+
+    def create_default_alpacca(self):
+        available = ollama.list()
+        identifier = make_to_model_str(available.models[0].model)
+        return Alpacca(available.models[0].model, identifier=identifier, history_location=f"{os.getcwd() + self.std_loc}/{identifier}.json")
 
     def load_alpacca_models(self) -> [List[Alpacca], List[str]]:
         """
@@ -275,7 +298,21 @@ class TextualConsole(App):
 
         return alpacas, setting_files
 
+    def save_chat(self, chat: AiChat):
+        if chat.current_line is not None:
+            separated = separate_thoughts(chat.current_line.response)
+            self.alpacas[self.selected_alpaca_id].add_history(chat.current_line.user, separated["think"], separated["response"])
+            self.style_logger.write_line(
+                f"In generate_ai: {chat.current_line.user} {separated['think']} {separated['response']}")
+            self.style_logger.write_line(f"Saved history for {self.alpacas[self.selected_alpaca_id].identifier}")
+        else:
+            self.style_logger.write_line(f"Skipping save history because current_line is not yet set!")
+
     def _on_exit_app(self) -> None:
+        for i in range(len(self.chats)):
+            chat = self.chats[i]
+            self.save_chat(chat)
+
         for alpaca in self.alpacas:
             alpaca.save_history()
             alpaca.save_alpacca_settings(f"{os.getcwd()}/{self.std_settings}/{alpaca.identifier}.json")
@@ -298,14 +335,7 @@ class TextualConsole(App):
     def generate_ai(self, prompt):
         self.style_logger.write_line(f"Generating AI: {prompt}")
         chat = self.chats[self.selected_alpaca_id]
-
-        if chat.current_line is not None:
-            separated = separate_thoughts(chat.current_line.response)
-            self.alpacas[self.selected_alpaca_id].add_history(chat.current_line.user, separated["think"], separated["response"])
-            self.style_logger.write_line(f"In generate_ai: {chat.current_line.user} {separated['think']} {separated['response']}")
-            self.style_logger.write_line(f"Saved history for {self.alpacas[self.selected_alpaca_id].identifier}")
-        else:
-            self.style_logger.write_line(f"Skipping save history because current_line is not yet set!")
+        self.save_chat(chat)
 
         self.chats[self.selected_alpaca_id].post_message(UserMessage(prompt))
         self.style_logger.write_line(f"Message posted!")
@@ -314,6 +344,9 @@ class TextualConsole(App):
             chat.post_message(AIResponse(part["response"], self.alpacas[self.selected_alpaca_id].identifier.upper()))
             # self.app.query_one(VerticalScroll).scroll_end()
             # TODO: Fix the scrolling issue
+
+def make_to_model_str(model: str) -> str:
+    return model.replace(".", "_").split(":")[0].replace("/", "_").upper() + str(floor(random() * 99))
 
 if __name__ == "__main__":
     app = TextualConsole()
