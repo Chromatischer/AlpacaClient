@@ -121,6 +121,29 @@ class Alpacca:
             Logger.log("History is not enabled", Priority.CRITICAL)
             raise Exception("History is not enabled")
 
+    def save_alpacca_settings(self, location: str):
+        """
+        Save the settings of the model to a file
+        :param location: The location to save the settings to
+        """
+        Logger.log(f"Alpacca: Saving settings to: {location}", Priority.NORMAL)
+        save_json(self.settings_to_dict(), location)
+        Logger.log("Settings saved", Priority.NORMAL)
+
+    def settings_to_dict(self):
+        return {
+            "model": self.model,
+            "temperature": self.options["temperature"],
+            "frequency_penalty": self.options["frequency_penalty"],
+            "stop": self.options["stop"],
+            "system": self.system_prompt if self.use_system else "Disabled",
+            "history": self.history_location if self.use_history else "Disabled"
+        }
+
+    def generate_name(self):
+        parts = self.history_location.split("/")
+        return parts[len(parts) - 1].replace(".json", "").strip().upper()
+
     async def generate_async(self, prompt):
         """
         Currently broken smh
@@ -174,3 +197,16 @@ class Alpacca:
         self.history = [chat_exchange_from_dict(d) for d in load_json(history_location, create=True)]
         self.use_history = True
         return True
+
+
+def load_alpacca_from_json(location:str) -> Alpacca:
+    """
+    Load an Alpacca model from a json file
+    :param location: The location of the json file
+    :return: The Alpacca model
+    """
+    data = load_json(location)
+    system = data["system"] if data["system"] != "Disabled" else None
+    history = data["history"] if data["history"] != "Disabled" else None
+    return Alpacca(data["model"], temperature=data["temperature"], frequency_penalty=data["frequency_penalty"], stop=data["stop"], system=system, history_location=history)
+
