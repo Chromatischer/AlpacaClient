@@ -203,7 +203,6 @@ class Alpacca:
         self.use_history = True
         return True
 
-
 def load_alpacca_from_json(location:str) -> Alpacca:
     """
     Load an Alpacca model from a json file
@@ -218,4 +217,3 @@ def load_alpacca_from_json(location:str) -> Alpacca:
     stop = data["stop"] if data["stop"] else None
     identifier = data["identifier"] if data["identifier"] else None
     return Alpacca(data["model"], temperature=temperature, frequency_penalty=frequency_penalty, stop=stop, system=system, history_location=history, identifier=identifier)
-

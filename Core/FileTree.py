@@ -8,12 +8,12 @@ from textual.screen import Screen
 from textual.widgets import Tree, Static, Markdown, Placeholder, Button
 from textual.widgets._tree import TreeNode, TreeDataType
 
+class SelectFileMessage(Message):
+    file_path: str
 
-class ViewerCanceled(Message):
-    def __init__(self):
+    def __init__(self, file_path: str):
+        self.file_path = file_path
         super().__init__()
-
-
 
 class FileViewer(Screen):
     CSS = """
@@ -72,16 +72,21 @@ class FileViewer(Screen):
     def compose(self) -> ComposeResult:
         with Container(id="main"):
             with Container(id="header"):
-                yield Button("Back", disabled=False)
+                yield Button("Back", disabled=False, id="back")
                 yield Placeholder("File Viewer", id="short")
-                yield Button("Use", disabled=True)
+                yield Button("Use", disabled=False, id="use")
             pre = f"```{self.code_type}\n" if self.is_code else ""
             post = f"\n```" if self.is_code else ""
             with Container(id="markdown-container"):
                 #yield Placeholder("File Viewer", id="Markdown")
                 yield Markdown(f"{pre}{self.load_from_file()}{post}")
 
-
+    @on(Button.Pressed)
+    def on_button_press(self, message: Button.Pressed) -> None:
+        if message.button.id == "back":
+            self.app.pop_screen()
+        elif message.button.id == "use":
+            self.app.post_message(SelectFileMessage(self.file_path))
 
 class FileTee(Tree):
     start_location: str # The file path to where the tree should start from
@@ -119,6 +124,10 @@ class FileTee(Tree):
 class TreeApp(App):
     def compose(self):
         yield FileTee("/Users/chromatischer/PycharmProjects/AI-Assist")
+
+    @on(SelectFileMessage)
+    def on_select_file_message(self, message: SelectFileMessage):
+        self.app.pop_screen()
 
 if __name__ == "__main__":
     app = TreeApp()
