@@ -1,7 +1,7 @@
 #app-grid {
     layout: grid;
     grid-size: 2;
-    grid-columns: 3fr 1fr;
+    grid-columns: 5fr 3fr;
 }
 #main-window {
     layout: vertical;
@@ -9,10 +9,11 @@
 }
 #side-window {
     layout: vertical;
-    border: solid yellow;
+    margin: 1 1;
 }
 #vertical-scroll-content {
-    border: solid orange;
+    border: round orange;
+    padding: 0 0 0 0;
 }
 #side-by-side {
     height: 0.2fr;
@@ -61,4 +62,9 @@ Markdown {
     max-width: 10%;
     text-style: bold;
     background: #fe6262;
+}
+PlotWidget {
+    height: 1fr;
+    width: 1fr;
+    margin: 0;
 }

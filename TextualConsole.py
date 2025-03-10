@@ -13,6 +13,7 @@ from textual.message import Message
 from textual.reactive import reactive, Reactive
 from textual.screen import Screen
 from textual.widgets import Static, Button, Input, Log, Markdown, Tabs, Select, Tab
+from textual_plot import PlotWidget
 
 from Core.Alpacca import Alpacca, separate_thoughts, load_alpacca_from_json
 
@@ -48,7 +49,8 @@ class ChatMessage(Message):
         return f"You: {self.user}\n\nAlpacca: {self.response}\n"
 
 class AiChat(Static):
-    lines: Reactive[ChatMessage] = []
+    lines: Reactive[ChatMessage] = reactive(list, recompose=True)
+    _load_from: Alpacca = None
     current_line: ChatMessage = None
     log: Log = None
     generation: GenerateResponse | Iterator[GenerateResponse] = None
@@ -58,8 +60,7 @@ class AiChat(Static):
         self.update_timer = None
         self.log = log
         self.identifier = identifier
-        if load_from is not None:
-            self.load_from_alpacca(load_from)
+        self._load_from = load_from
         super().__init__()
 
     def compose(self) -> ComposeResult:
@@ -73,7 +74,8 @@ class AiChat(Static):
             yield Markdown(f"{content}", classes="body")
 
     def on_mount(self):
-        pass
+        if self._load_from is not None:
+            self.load_from_alpacca(self._load_from)
 
     def new_line(self, user: str):
         """
@@ -92,7 +94,8 @@ class AiChat(Static):
         self.log.write_line(f"current_line now reset!")
 
     def change_happened(self):
-        self.recompose()
+        self.mutate_reactive(AiChat.lines)
+        self.scroll_end(force=True)
 
     @on(AIResponse)
     def on_ai_response(self, message: AIResponse):
@@ -216,10 +219,11 @@ class TextualConsole(App):
                     yield self.chats[0]
                 with Container(id="side-by-side"):
                     yield Button("+", id="button-add", disabled=True)
-                    yield Input(placeholder="Chat with AI: ", type="text", tooltip="Type your message here", id="chat-input")
+                    yield Input(placeholder="Chat with AI: ", type="text", id="chat-input")
                     yield Button("Send", id="send-button")
             with Container(id="side-window"):
-                yield Static("Second", classes="debug")
+                yield PlotWidget()
+                #yield Static("Second", classes="debug")
                 yield self.style_logger
                 #yield Static("Third", classes="debug")
 
@@ -227,7 +231,7 @@ class TextualConsole(App):
         self.style_logger.write_line("Mount Complete!")
         for name in os.listdir(os.getcwd() + self.std_settings):
             if os.path.isfile(os.getcwd() + self.std_settings + "/" + name):
-                self.style_logger.write_line(os.getcwd() + self.std_settings + "/" + name)
+                self.style_logger.write_line(f"default/{self.std_settings}/{name}")
 
     @on(Tabs.TabMessage)
     def on_tab_activated(self, event: Tabs.TabActivated):
