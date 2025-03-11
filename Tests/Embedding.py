@@ -1,9 +1,10 @@
 import unittest
 
 from Core.Embedding import Embedding
+from Core.Logger import Logger
 
 
-class MyTestCase(unittest.TestCase):
+class SimpleTests(unittest.TestCase):
     embedding: Embedding
 
     @classmethod
@@ -30,11 +31,20 @@ class MyTestCase(unittest.TestCase):
         query = self.embedding.embed("Who are you?")
         print(f"Query: {query}")
         print(f"{self.embedding.query_by_embedding(query, number_of_results=2)}")
-        print(f"{self.embedding.query_part_by_embedding(query)}")
+        print(f"{self.embedding.query_document_by_embedding(query)}")
 
-    def test_save(self):
-        self.embedding.save_db("/Users/chromatischer/PycharmProjects/AI-Assist/Resources/Embeddings.json")
-        print("Database saved")
+class PersistenceTests(unittest.TestCase):
+    path: str = "/Users/chromatischer/PycharmProjects/AI-Assist/Resources"
+    def test_persistence(self):
+        persist_datab = Embedding("nomic-embed-text", db_path=self.path)
+        emb = persist_datab.embed("Hello, how are you?")
+        persist_datab.save_to_collection(text="Hello, how are you?", embedding=emb)
+        Logger.log(str(len(persist_datab)))
+        second = Embedding("nomic-embed-text", db_path=self.path)
+        print(f"{second.query_by_embedding(second.embed('Hello, how are you?'))}")
+
+class PdfEmbeddingTests(unittest.TestCase):
+
 
 if __name__ == '__main__':
     unittest.main()

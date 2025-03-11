@@ -2,6 +2,7 @@ from math import ceil
 from typing import Any
 
 import chromadb
+from chromadb import Settings
 from chromadb.types import Collection
 from ollama import Client, EmbedResponse
 from pypdf import PdfReader
@@ -17,26 +18,32 @@ class Embedding:
     client: Client
     collection: Collection
     embedding_length: int
+    collection_name: str = "embeddings"
 
     def __init__(self, model: str, db_path: str | None = None, embedding_length: int = 512):
         self.model = model
         self.embedding_length = embedding_length
         self.client = Client()
-        self.db_client = chromadb.Client()
         Logger.log("Connected to the ollama API", priority=Priority.NORMAL)
-        Logger.log("Loading model", priority=Priority.NORMAL)
-        try:
-            self.collection = self.db_client.get_collection("embeddings")
-        except Exception as e:
-            print("Error:", e)
-            Logger.log("Failed to load embeddings", priority=Priority.NORMAL)
-            self.collection = self.db_client.create_collection("embeddings")
-            Logger.log("Created new collection!", priority=Priority.HIGH)
 
         if db_path is not None:
-            Logger.log("Loading embeddings from file", priority=Priority.NORMAL)
-            self.collection.from_json(load_json(db_path))
+            Logger.log(f"ChromaDB Persistent at location {db_path}", priority=Priority.NORMAL)
+            self.db_client = chromadb.Client(Settings(persist_directory=db_path))
+        else:
+            Logger.log(f"ChromaDB In-Memory because db_path is: {db_path}", priority=Priority.NORMAL)
+            self.db_client = chromadb.Client()
 
+        success = True
+        try:
+            self.collection = self.db_client.get_collection(self.collection_name)
+        except Exception as e:
+            print("Error:", e)
+            success = False
+            Logger.log("Failed to load embeddings", priority=Priority.NORMAL)
+            self.collection = self.db_client.create_collection(self.collection_name)
+            #Logger.log("Created new collection!", priority=Priority.HIGH)
+
+        Logger.log(f"{success and 'Loaded' or 'Created'} Collection: [{self.collection_name}]", priority=Priority.HIGH)
 
         if not any((model in m["model"]) for m in self.client.list().models):
             for m in self.client.list().models:
@@ -47,11 +54,23 @@ class Embedding:
 
     def embed(self, text: str) -> EmbedResponse:
         """
-        Embed a text using the model
+        Embed a text using the model and return the embedding
         :param text: The text to embed
-        :return: The embedding response
+        :return: The embedding of the text
         """
         return self.client.embed(self.model, text)["embeddings"]
+
+    def __len__(self) -> int:
+        return self.collection.count()
+
+    def save_to_collection(self,text: str, embedding: list[float], source: str = "None"):
+        """
+        Add an embedding to the database
+        :param text: The text that had been embedded
+        :param embedding: The embedding of the text
+        :param source: Optional source of the text
+        """
+        self.collection.add(ids=[str(len(self))], embeddings=embedding, documents=[text], metadatas=[{"source": source}])
 
     def embed_file(self, file_path: str):
         """
@@ -99,12 +118,22 @@ class Embedding:
             Logger.log(f"Page: {page} / {reader.pages}", priority=Priority.NORMAL)
             self._embed_long(page.extract_text(), pdf_path, token_count=self.embedding_length)
 
-    def save_db(self, path: str):
-        #save_json(, path=path)
-        print(self.collection.model_dump_json())
-
-    def query_by_embedding(self, embedding: list[float], number_of_results: int = 1):
+    # noinspection SpellCheckingInspection
+    def query_by_embedding(self, embedding: list[float], number_of_results: int = 1) -> dict:
+        """
+        Query the database using an embedding
+        :param embedding: The embedding to query with
+        :param number_of_results: The number of results to return
+        :return: The results of the query {"ids": [id], "documents": [document], "uris": [uri], "data": [data], "metadatas": [metadata], "distances": [distance], "included": [included]}
+        """
         return self.collection.query(query_embeddings=embedding, n_results=number_of_results)
 
-    def query_part_by_embedding(self, embedding: list[float], number_of_results: int = 1):
+    def query_document_by_embedding(self, embedding: list[float], number_of_results: int = 1) -> str:
+        """
+        Only return the document from the query
+        :param embedding: The embedding to query with
+        :param number_of_results: The number of results to return
+        :return: String of the document that was embedded and best fits the query
+        """
         return self.query_by_embedding(embedding, number_of_results=number_of_results)["documents"][0][0]
+
