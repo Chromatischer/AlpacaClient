@@ -18,12 +18,13 @@ class Embedding:
     client: Client
     collection: Collection
     embedding_length: int
-    collection_name: str = "embeddings"
+    collection_name: str
 
-    def __init__(self, model: str, db_path: str | None = None, embedding_length: int = 512):
+    def __init__(self, model: str, db_path: str | None = None, embedding_length: int = 512, collection_name: str = "embeddings"):
         self.model = model
         self.embedding_length = embedding_length
         self.client = Client()
+        self.collection_name = collection_name
         Logger.log("Connected to the ollama API", priority=Priority.NORMAL)
 
         if db_path is not None:
@@ -72,29 +73,35 @@ class Embedding:
         """
         self.collection.add(ids=[str(len(self))], embeddings=embedding, documents=[text], metadatas=[{"source": source}])
 
-    def embed_file(self, file_path: str):
+    def embed_file(self, file_path: str, overlap: int = 0):
         """
         Embed a file using the model and store the embedding in the database
         :param file_path: The file path to embed
+        :param overlap: The number of tokens to overlap between chunks adds 2overlap tokens to each chunk
         """
         with open(file_path, "rb") as file:
             Logger.log(f"Embedding content of file: {file_path}", priority=Priority.NORMAL)
             content = file.read().decode("utf-8")
-            self._embed_long(content, file_path, token_count=self.embedding_length)
+            self._embed_long(content, file_path, token_count=self.embedding_length, overlap=overlap)
 
-    def _embed_long(self, content: str, file_path: str, token_count: int = 512):
+    def _embed_long(self, content: str, source_str: str, token_count: int = 512, overlap: int = 0, auto_balance: bool = True):
         """
         Embed a long content by splitting it into chunks and embedding each chunk
         Saves the embeddings in the database
         :param content: The content to embed
-        :param file_path: The path to the file containing the content to add to the metadata
+        :param source_str: The path to the file containing the content to add to the metadata
         :param token_count: The number of tokens to embed with each chunk
+        :param overlap: The number of tokens to overlap between chunks adds 2overlap tokens to each chunk
         """
+
+        if auto_balance and overlap > 0:
+            token_count -= 2 * overlap
+
         chunks: list[str] = []
 
         current_position = 0
-        for i in range(ceil(len(content.split()) / 512)):  # Split the file into chunks of 512 words + 1
-            chunk = " ".join(content.split()[current_position:current_position + token_count])  # Split the file into chunks of 512 words starting from the current position
+        for i in range(ceil(len(content.split()) / token_count)):  # Split the file into chunks of 512 words + 1
+            chunk = " ".join(content.split()[max(current_position - overlap, 0):min(current_position + token_count + overlap, len(content.split()))])  # Split the file into chunks of 512 words starting from the current position
             chunks.append(chunk)
             current_position += token_count  # Move the current position to the next 512 words
 
@@ -103,12 +110,13 @@ class Embedding:
             # The embedding is stored in the database with the id of the chunk and the path to the document for
             # future reference and manual lookup
             self.collection: Collection
-            self.collection.add(ids=[str(i)], embeddings=embedding, documents=chunk, metadatas=[{"source": file_path}])
+            self.collection.add(ids=[str(i)], embeddings=embedding, documents=chunk, metadatas=[{"source": source_str}])
 
-    def embed_pdf(self, pdf_path: str):
+    def embed_pdf(self, pdf_path: str, overlap: int = 0):
         """
         Using the pypdf library, extract the text from the pdf and embed it using the model
         Saves the embeddings in the database
+        :param overlap: The number of tokens to overlap between chunks adds 2overlap tokens to each chunk
         :param pdf_path: The path to the pdf file
         """
         # Use the pypdf library to extract the text from the pdf
@@ -116,7 +124,7 @@ class Embedding:
         Logger.log(f"Embedding content of pdf: {pdf_path}", priority=Priority.NORMAL)
         for page in reader.pages:
             Logger.log(f"Page: {page} / {reader.pages}", priority=Priority.NORMAL)
-            self._embed_long(page.extract_text(), pdf_path, token_count=self.embedding_length)
+            self._embed_long(content=page.extract_text(), source_str=pdf_path, token_count=self.embedding_length, overlap=overlap)
 
     # noinspection SpellCheckingInspection
     def query_by_embedding(self, embedding: list[float], number_of_results: int = 1) -> dict:

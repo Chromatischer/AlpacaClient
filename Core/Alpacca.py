@@ -74,7 +74,8 @@ class Alpacca:
         self.client = Client()
         self.stop = stop
         self.options = {"temperature": temperature, "frequency_penalty": frequency_penalty, "stop": stop}
-        if system:
+        if system is not None:
+            self.system_prompt_location = system
             self.system_prompt = load_from_file(system)
             self.use_system = True
         else:
@@ -140,10 +141,19 @@ class Alpacca:
             "temperature": self.options["temperature"],
             "frequency_penalty": self.options["frequency_penalty"],
             "stop": self.options["stop"],
-            "system": self.system_prompt if self.use_system else "Disabled",
+            "system": self.system_prompt_location if self.use_system else "Disabled",
             "history": self.history_location if self.use_history else "Disabled",
             "identifier": self.identifier
         }
+
+    def set_system_prompt(self, prompt_file_location: str) -> None:
+        """
+        Set the system prompt of the model
+        :param prompt_file_location: The location of the system prompt file
+        """
+        self.system_prompt_location = prompt_file_location
+        self.system_prompt = load_from_file(prompt_file_location)
+        self.use_system = True
 
     def generate_name(self):
         parts = self.history_location.split("/")
@@ -165,20 +175,41 @@ class Alpacca:
         iterator = await ollama.AsyncClient().generate(model=self.model, options=self.options, prompt=prompt, system=system_prompt, stream=True)
         return iterator
 
-    def generate_iterable(self, prompt):
+    def generate_iterable(self, prompt, rag_context: list[str] = None):
         """
         Generate an iterable response from the model based on the prompt, system prompt and provided history
         :param prompt: The prompt to generate a response from
+        :param rag_context: The context gathered using RAG
         :return: An iterable that generates the response from the model
         """
         Logger.log(f"Generating Iteratable Response using Alpacca model: {self.model}", Priority.NORMAL)
-        user_question = prompt
-        context = self.use_history and history_string(self.history) or ""
-        system_prompt = self.use_system and self.system_prompt or ""
-        prompt += f"\n{context}"
+        prompt = self._make_prompt(prompt, rag_context=rag_context)
         Logger.log(f"Prompt: {prompt}", Priority.DEBUG)
-        iterator:  GenerateResponse | Iterator[GenerateResponse] = ollama.Client().generate(model=self.model, options=self.options, prompt=prompt, system=system_prompt, stream=True)
+        iterator:  GenerateResponse | Iterator[GenerateResponse] = ollama.Client().generate(model=self.model, options=self.options, prompt=prompt, stream=True)
         return iterator
+
+    def _make_prompt(self, prompt: str, rag_context: list[str] = None) -> str:
+        context = self.use_history and history_string(self.history) or ""
+        system_prompt = self.use_system and self.system_prompt or None
+        if system_prompt and "%RAG%" in system_prompt:
+            if rag_context is not None:
+                Logger.log(f"RAG Context: {rag_context}", Priority.NORMAL)
+                system_prompt = system_prompt.replace("%RAG%", " ".join(rag_context))
+            else:
+                Logger.log("RAG Context is empty", Priority.CRITICAL)
+
+        if system_prompt and "%RPreviousExchange%" in system_prompt:
+            system_prompt = system_prompt.replace("%RPreviousExchange%", context)
+
+        if system_prompt and "%UserPrompt%" in system_prompt:
+            system_prompt = system_prompt.replace("%UserPrompt%", prompt)
+
+        if not self.use_system:
+            return prompt
+        return system_prompt
+
+    def get_system_prompt_now(self, rag_context: list[str] = None, prompt: str = "") -> str:
+        return self._make_prompt(prompt, rag_context)
 
     def add_history(self, user: str, thoughts: str, answer: str):
         """

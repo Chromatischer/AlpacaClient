@@ -2,6 +2,7 @@ import unittest
 
 from Core.Embedding import Embedding
 from Core.Logger import Logger
+from Core.Priority import Priority
 
 
 class SimpleTests(unittest.TestCase):
@@ -23,7 +24,7 @@ class SimpleTests(unittest.TestCase):
 
     def test_embedding_file(self):
         # embed a file
-        self.embedding.embed_file("/Users/chromatischer/PycharmProjects/AI-Assist/Resources/SystemPrompt.md")
+        self.embedding.embed_file("/Resources/SystemPrompts/SystemPrompt.md")
         print("File embedded")
 
     def test_query(self):
@@ -44,6 +45,15 @@ class PersistenceTests(unittest.TestCase):
         print(f"{second.query_by_embedding(second.embed('Hello, how are you?'))}")
 
 class PdfEmbeddingTests(unittest.TestCase):
+    def test_embedding_pdf(self):
+        embedding = Embedding("nomic-embed-text", embedding_length=50)
+        embedding.embed_pdf("/Users/chromatischer/PycharmProjects/AI-Assist/Temp/Motivationsschreiben.pdf", overlap=5)
+        Logger.log(str(len(embedding)), priority=Priority.NORMAL)
+        query = embedding.embed("Which clubs are you in?")
+        print(embedding.query_by_embedding(embedding=query, number_of_results=2))
+        print(embedding.query_document_by_embedding(embedding=query, number_of_results=2))
+
+
 
 
 if __name__ == '__main__':

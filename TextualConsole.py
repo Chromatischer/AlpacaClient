@@ -1,21 +1,18 @@
-import os
 from math import floor
 from random import random
 from typing import Iterator, List
 
 import ollama
 from ollama import GenerateResponse
-from textual import work, on
-from textual.app import App, ComposeResult
-from textual.containers import Container, VerticalScroll
-from textual.css.model import Selector
-from textual.message import Message
+from textual import work
+from textual.containers import VerticalScroll
 from textual.reactive import reactive, Reactive
-from textual.screen import Screen
-from textual.widgets import Static, Button, Input, Log, Markdown, Tabs, Select, Tab
+from textual.widgets import Static, Input, Log, Tabs, Select, Tab
 from textual_plot import PlotWidget
 
 from Core.Alpacca import Alpacca, separate_thoughts, load_alpacca_from_json
+from Core.FileTree import *
+
 
 class UserMessage(Message):
     user: str
@@ -65,13 +62,13 @@ class AiChat(Static):
 
     def compose(self) -> ComposeResult:
         if self.current_line is None and len(self.lines) == 0:
-            yield Markdown(f"Chat with AI: {self.identifier}", classes="body")
+            yield Markdown(f"Chat with AI: {self.identifier}")
         else:
             # self.log.write_line(str(self.current_line))
             content = "\n".join(str(m) for m in self.lines)
             # self.log.write_line(content)
             content += "\n" + str(self.current_line)
-            yield Markdown(f"{content}", classes="body")
+            yield Markdown(f"{content}")
 
     def on_mount(self):
         if self._load_from is not None:
@@ -94,8 +91,9 @@ class AiChat(Static):
         self.log.write_line(f"current_line now reset!")
 
     def change_happened(self):
-        self.mutate_reactive(AiChat.lines)
-        self.scroll_end(force=True)
+        #self.mutate_reactive(AiChat.lines)
+        self.query_one(Markdown).update(f"{'\n'.join(str(m) for m in self.lines)}\n{self.current_line}")
+        #self.scroll_end(force=True)
 
     @on(AIResponse)
     def on_ai_response(self, message: AIResponse):
@@ -105,7 +103,7 @@ class AiChat(Static):
         """
         # self.log.write_line(f"AI Response: {message.response} To: {message.identifier} Self: {self.identifier}")
 
-        if message.identifier == self.identifier:
+        if message.identifier.upper() == self.identifier.upper():
             self.current_line.add_part(message.response)
             self.change_happened()
 
@@ -195,6 +193,8 @@ class TextualConsole(App):
     chats: List[AiChat] = []
     files: List[str] = []
     selected_alpaca_id: int = 0
+    file_tree_open: bool = False
+    generate_running: reactive[bool] = reactive(False)
 
     def __init__(self):
         print("Initializing Textual Console")
@@ -218,7 +218,7 @@ class TextualConsole(App):
                 with VerticalScroll(id="vertical-scroll-content"):
                     yield self.chats[0]
                 with Container(id="side-by-side"):
-                    yield Button("+", id="button-add", disabled=True)
+                    yield Button("+", id="button-add")
                     yield Input(placeholder="Chat with AI: ", type="text", id="chat-input")
                     yield Button("Send", id="send-button")
             with Container(id="side-window"):
@@ -255,7 +255,7 @@ class TextualConsole(App):
                 self.style_logger.write_line(f"Error: {e}")
 
     @on(CreateModelCanceled)
-    def on_model_canceled(self, event: CreateModelCanceled):
+    def on_model_canceled(self):
         self.style_logger.write_line("Model creation canceled!")
         self.app.query_one(ChatHistory).action_previous_tab()
         #TODO: Send Tab.Change message to the ChatHistory widget because it is not updating the currently active tab!
@@ -324,20 +324,32 @@ class TextualConsole(App):
 
     def on_button_pressed(self, event: Button.Pressed):
         if event.button.id == "send-button":
-            self.generate_ai(self.query_one(Input).value)
-            #self.chats[self.selected_alpaca_id].post_message(UserMessage(self.query_one(Input).value))
-            self.query_one(Input).clear()
+            if not self.query_one(Input).value == "":
+                self.generate_ai(self.query_one(Input).value)
+                #self.chats[self.selected_alpaca_id].post_message(UserMessage(self.query_one(Input).value))
+                self.query_one(Input).clear()
+
+        if event.button.id == "button-add":
+            if not self.file_tree_open:
+                self.app.get_widget_by_id("main-window").mount(FileTee(os.getcwd()))
+            else:
+                self.app.get_widget_by_id("main-window").query_one(FileTee).remove()
+            self.file_tree_open = not self.file_tree_open
+            self.app.recompose()
 
     def on_input_submitted(self, event: Input.Submitted):
         # self.style_logger.write_line("Input Submitted: " + event.value)
-        self.generate_ai(event.value)
-        #self.chats[self.selected_alpaca_id].post_message(UserMessage(event.value))
-        self.query_one(Input).clear()
-        # self.recompose()
+        if not (event.value == "" or self.generate_running):
+            self.generate_ai(event.value)
+            #self.chats[self.selected_alpaca_id].post_message(UserMessage(event.value))
+            self.query_one(Input).clear()
+            # self.recompose()
 
     @work(thread=True)
     def generate_ai(self, prompt):
-        self.style_logger.write_line(f"Generating AI: {prompt}")
+        self.style_logger.write_line(f"Generating Prompt: {prompt}")
+        self.generate_running = True
+        self.get_widget_by_id("send-button").disabled = True
         chat = self.chats[self.selected_alpaca_id]
         self.save_chat(chat)
 
@@ -346,8 +358,10 @@ class TextualConsole(App):
 
         for part in self.alpacas[self.selected_alpaca_id].generate_iterable(prompt=prompt):
             chat.post_message(AIResponse(part["response"], self.alpacas[self.selected_alpaca_id].identifier.upper()))
-            # self.app.query_one(VerticalScroll).scroll_end()
+            self.app.query_one(VerticalScroll).scroll_end(force=True)
             # TODO: Fix the scrolling issue
+        self.generate_running = False
+        self.get_widget_by_id("send-button").disabled = False
 
 def make_to_model_str(model: str) -> str:
     return model.replace(".", "_").split(":")[0].replace("/", "_").upper() + str(floor(random() * 99))

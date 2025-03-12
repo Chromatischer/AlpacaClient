@@ -5,8 +5,9 @@ from textual.app import ComposeResult, App
 from textual.containers import Container
 from textual.message import Message
 from textual.screen import Screen
-from textual.widgets import Tree, Static, Markdown, Placeholder, Button
-from textual.widgets._tree import TreeNode, TreeDataType
+from textual.widgets import Tree, Markdown, Placeholder, Button
+# noinspection PyProtectedMember
+from textual.widgets._tree import TreeNode
 
 class SelectFileMessage(Message):
     file_path: str
@@ -48,6 +49,7 @@ class FileViewer(Screen):
             }
         }
     """
+    # noinspection SpellCheckingInspection
     CODETYPES = [[".py", "python"], [".html", "html"], [".css", "css"], [".js", "javascript"], [".ts", "typescript"], [".c", "c"], [".cpp", "cpp"], [".java", "java"]]
 
     # Show a single file, content output as a Markdown object
@@ -120,6 +122,16 @@ class FileTee(Tree):
         data = str(node.data).split("\\")
         if data[0] == "file":
             self.app.push_screen(FileViewer(data[1]))
+
+class TreeViewer(Screen):
+    origin: str
+
+    def __init__(self, origin: str):
+        self.origin = origin
+        super().__init__()
+
+    def compose(self) -> ComposeResult:
+        yield FileTee(start_location=self.origin)
 
 class TreeApp(App):
     def compose(self):

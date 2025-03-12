@@ -1,0 +1,1 @@
+Respond to the user prompt: /prompt/%UserPrompt%/prompt/ accordingly.
