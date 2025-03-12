@@ -1,6 +1,8 @@
+import time
 from math import floor
 from random import random
 from typing import Iterator, List
+import psutil
 
 import ollama
 from ollama import GenerateResponse
@@ -12,6 +14,7 @@ from textual_plot import PlotWidget
 
 from Core.Alpacca import Alpacca, separate_thoughts, load_alpacca_from_json
 from Core.FileTree import *
+from Core.MemGraph import Memgraph
 
 
 class UserMessage(Message):
@@ -222,7 +225,7 @@ class TextualConsole(App):
                     yield Input(placeholder="Chat with AI: ", type="text", id="chat-input")
                     yield Button("Send", id="send-button")
             with Container(id="side-window"):
-                yield PlotWidget()
+                yield Memgraph()
                 #yield Static("Second", classes="debug")
                 yield self.style_logger
                 #yield Static("Third", classes="debug")
@@ -232,6 +235,13 @@ class TextualConsole(App):
         for name in os.listdir(os.getcwd() + self.std_settings):
             if os.path.isfile(os.getcwd() + self.std_settings + "/" + name):
                 self.style_logger.write_line(f"default/{self.std_settings}/{name}")
+        self.set_interval(1, self.update_sys_info)
+
+    def update_sys_info(self):
+        mem = psutil.virtual_memory()[3] / 1_000_000_000 # in GB
+        swap = psutil.swap_memory()[1] / 1_000_000_000
+        if self.screen.id == "_default":
+            self.app.query_one(Memgraph).append_data_point(time.time(), mem, swap)
 
     @on(Tabs.TabMessage)
     def on_tab_activated(self, event: Tabs.TabActivated):
