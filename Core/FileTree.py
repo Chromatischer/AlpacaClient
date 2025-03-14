@@ -138,7 +138,7 @@ class TreeApp(App):
         yield FileTee("/Users/chromatischer/PycharmProjects/AI-Assist")
 
     @on(SelectFileMessage)
-    def on_select_file_message(self, message: SelectFileMessage):
+    def on_select_file_message(self):
         self.app.pop_screen()
 
 if __name__ == "__main__":

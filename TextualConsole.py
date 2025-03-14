@@ -125,7 +125,7 @@ class AiChat(Static):
         Load the chat history from an alpacca
         :param alpacca: The alpacca to load the history from
         """
-        for exchange in alpacca.history:
+        for exchange in alpacca.get_history():
             message = ChatMessage(exchange.user)
             message.add_part(f"{exchange.thoughts}\n{exchange.answer}")
             self.lines.append(message)
@@ -167,16 +167,26 @@ class ModelSelectScreen(Screen):
             self.app.post_message(CreateModelMessage(self.query_one(Select).value))
             self.app.pop_screen()
 
-class ChatHistory(Tabs):
+class MainTabs(Tabs):
+    TABS = ["Chats", "Settings", "More"]
+
+    def compose(self) -> ComposeResult:
+        yield Tabs(id="main-tabs")
+
+    def on_mount(self) -> None:
+        for tab in self.TABS:
+            self.query_one(Tabs).add_tab(Tab(tab))
+
+class ChatTabs(Tabs):
     log: Log = None
     files: List[str] = []
     alpacas: List[Alpacca] = []
 
-    def __init__(self, logger: Log, alpacas: List[Alpacca], files: List[str]):
+    def __init__(self, logger: Log, alpacas: List[Alpacca], files: List[str], id: str = ""):
         self.log = logger
         self.files = files
         self.alpacas = alpacas
-        super().__init__()
+        super().__init__(id=id)
 
     def compose(self) -> ComposeResult:
         yield Tabs(Tab(self.alpacas[0].identifier, id=f"tab-0"))
@@ -214,9 +224,10 @@ class TextualConsole(App):
         super().__init__()
 
     def compose(self) -> ComposeResult:
+        yield MainTabs()
         with Container(id="app-grid"):
             with Container(id="main-window"):
-                yield ChatHistory(self.style_logger, self.alpacas, self.files)
+                yield ChatTabs(self.style_logger, self.alpacas, self.files, id="chat-tabs")
                 #yield Tabs("Hello")
                 with VerticalScroll(id="vertical-scroll-content"):
                     yield self.chats[0]
@@ -246,6 +257,8 @@ class TextualConsole(App):
     @on(Tabs.TabMessage)
     def on_tab_activated(self, event: Tabs.TabActivated):
         # self.style_logger.write_line(f"Tab Activated! {event.tab.id}")
+        if event.tabs.id == "main-tabs":
+            pass
         if event.tab.id == "add-tab":
             self.style_logger.write_line(f"Add was pressed!")
             self.app.push_screen(ModelSelectScreen(self.style_logger))
@@ -267,7 +280,7 @@ class TextualConsole(App):
     @on(CreateModelCanceled)
     def on_model_canceled(self):
         self.style_logger.write_line("Model creation canceled!")
-        self.app.query_one(ChatHistory).action_previous_tab()
+        self.app.query_one(ChatTabs).action_previous_tab()
         #TODO: Send Tab.Change message to the ChatHistory widget because it is not updating the currently active tab!
 
     @on(CreateModelMessage)
@@ -275,9 +288,9 @@ class TextualConsole(App):
         model_str = make_to_model_str(event.model)
         self.alpacas.append(Alpacca(event.model, history_location=f"{os.getcwd() + self.std_loc}/{model_str}.json", identifier=f"{model_str}"))
         self.chats.append(AiChat(log=self.style_logger, identifier=f"{model_str}"))
-        self.query_one(ChatHistory).add_tab(Tab(f"{model_str}", id=f"tab-{len(self.chats) - 1}"), before="add-tab")
+        self.query_one(ChatTabs).add_tab(Tab(f"{model_str}", id=f"tab-{len(self.chats) - 1}"), before="add-tab")
         self.recompose()
-        self.query_one(ChatHistory).action_previous_tab()
+        self.query_one(ChatTabs).action_previous_tab()
 
     def create_default_alpacca(self):
         available = ollama.list()

@@ -11,6 +11,7 @@ If you require additional context or information generate a precise Google searc
 For Example: <Query>Current population of New York City</Query>.
 By doing this, the Google search will be executed by the system. This allows you to gain Information that is not provided by the user.
 Information provided within the "<Context> </Context>" brackets should always be used to help the user. It is acquired using a large Embedding Database.
+When enough information about the users needs is known, provide five Web Queries in the above format to gather information!
 If the context is empty or irrelevant / not helpful, start your answer by saying: "**RAG INFORMATION REQUIRED**".
 If the context is helpful or not needed within the conversation, start your answer by saying: "**EVAL-SUFFICIENT INFORMATION**".
 Respond to the user prompt: <Prompt>%UserPrompt%</Prompt> accordingly.

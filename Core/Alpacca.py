@@ -62,36 +62,42 @@ def history_string(history: List[ChatExchange]) -> str:
     return full
 
 class Alpacca:
-    history: List[ChatExchange] # History of messages and responses between the user and the model
-    history_location: str # The location of the history file
+    _history: List[ChatExchange] # History of messages and responses between the user and the model
+    _history_location: str # The location of the history file
     context: [[int]] = [] # The context of the conversation
+    _remote: str = None
+    _use_remote: bool = False # If the model is remote
 
-    def __init__(self, model: str, previous_history: [ChatExchange] = None, temperature: float = 1, frequency_penalty: float = 0, stop: [str] = None, system: str = None, history_location: str = None, identifier: str = None):
-        self.model = model # The model to use
-        self.history = previous_history
-        self.history_location = history_location
+    def __init__(self, model: str, previous_history: [ChatExchange] = None, temperature: float = 1, frequency_penalty: float = 0, stop: [str] = None, system: str = None, history_location: str = None, identifier: str = None, host: str = None):
+        self._model = model # The model to use
+        self._history = previous_history
+        self._history_location = history_location
         self.identifier = identifier
-        self.client = Client()
-        self.stop = stop
-        self.options = {"temperature": temperature, "frequency_penalty": frequency_penalty, "stop": stop}
+        self._client = Client()
+        if host is not None:
+            self._client = Client(host=host)
+            self._remote = host
+            self._use_remote = True
+        self._stop = stop
+        self._options = {"temperature": temperature, "frequency_penalty": frequency_penalty, "stop": stop}
         if system is not None:
-            self.system_prompt_location = system
-            self.system_prompt = load_from_file(system)
-            self.use_system = True
+            self._system_prompt_location = system
+            self._system_prompt = load_from_file(system)
+            self._use_system = True
         else:
-            self.use_system = False
+            self._use_system = False
 
         if history_location or previous_history:
             try:
-                self.history = [chat_exchange_from_dict(d) for d in load_json(history_location, create=True)]
+                self._history = [chat_exchange_from_dict(d) for d in load_json(history_location, create=True)]
             except FileNotFoundError:
-                self.history = []
-            self.use_history = True
+                self._history = []
+            self._use_history = True
         else:
-            self.use_history = False
+            self._use_history = False
 
     def __str__(self):
-        return f"Alpacca model of: {self.model}"
+        return f"Alpacca model of: {self._model}"
 
     def generate(self, prompt) -> ChatResponse:
         """
@@ -99,28 +105,26 @@ class Alpacca:
         :param prompt: The prompt to generate a response from
         :return: The response from the model
         """
-        Logger.log(f"Generating Response using Alpacca model: {self.model}", Priority.NORMAL)
+        Logger.log(f"Generating Response Response using Alpacca model: {self._model}", Priority.NORMAL)
         user_question = prompt
-        context = self.use_history and history_string(self.history) or ""
-        system_prompt = self.use_system and self.system_prompt or ""
-        prompt += f"\n{context}"
+        prompt = self._make_prompt(prompt)
         Logger.log(f"Prompt: {prompt}", Priority.DEBUG)
-        response: ChatResponse = self.client.generate(model=self.model, options=self.options, prompt=prompt, system=system_prompt)
+        response: ChatResponse = self._client.generate(model=self._model, options=self._options, prompt=prompt)
         self.context.append(response)
         print(response.context)
 
         lama_response = separate_thoughts(response["response"])
         print(lama_response)
-        if self.use_history: self.history.append(ChatExchange(user_question, lama_response["think"], lama_response["response"]))
+        if self._use_history: self._history.append(ChatExchange(user_question, lama_response["think"], lama_response["response"]))
         return response
 
     def save_history(self):
         """
         Save the history to a file
         """
-        if self.use_history:
-            Logger.log(f"Alpacca: Saving history to: {self.history_location}", Priority.NORMAL)
-            save_json([h.dict() for h in self.history], self.history_location)
+        if self._use_history:
+            Logger.log(f"Alpacca: Saving history to: {self._history_location}", Priority.NORMAL)
+            save_json([h.dict() for h in self._history], self._history_location)
             Logger.log("History saved", Priority.NORMAL)
         else:
             Logger.log("History is not enabled", Priority.CRITICAL)
@@ -137,13 +141,14 @@ class Alpacca:
 
     def settings_to_dict(self):
         return {
-            "model": self.model,
-            "temperature": self.options["temperature"],
-            "frequency_penalty": self.options["frequency_penalty"],
-            "stop": self.options["stop"],
-            "system": self.system_prompt_location if self.use_system else "Disabled",
-            "history": self.history_location if self.use_history else "Disabled",
-            "identifier": self.identifier
+            "model": self._model,
+            "temperature": self._options["temperature"],
+            "frequency_penalty": self._options["frequency_penalty"],
+            "stop": self._options["stop"],
+            "system": self._system_prompt_location if self._use_system else "Disabled",
+            "history": self._history_location if self._use_history else "Disabled",
+            "identifier": self.identifier,
+            "remote": self._remote if self._use_remote else "Disabled"
         }
 
     def set_system_prompt(self, prompt_file_location: str) -> None:
@@ -151,12 +156,12 @@ class Alpacca:
         Set the system prompt of the model
         :param prompt_file_location: The location of the system prompt file
         """
-        self.system_prompt_location = prompt_file_location
-        self.system_prompt = load_from_file(prompt_file_location)
-        self.use_system = True
+        self._system_prompt_location = prompt_file_location
+        self._system_prompt = load_from_file(prompt_file_location)
+        self._use_system = True
 
     def generate_name(self):
-        parts = self.history_location.split("/")
+        parts = self._history_location.split("/")
         return parts[len(parts) - 1].replace(".json", "").strip().upper()
 
     async def generate_async(self, prompt):
@@ -166,13 +171,10 @@ class Alpacca:
         :param prompt: The prompt to generate a response from
         :return: Coroutine that generates the response from the model
         """
-        Logger.log(f"Generating Async Response using Alpacca model: {self.model}", Priority.NORMAL)
-        user_question = prompt
-        context = self.use_history and history_string(self.history) or ""
-        system_prompt = self.use_system and self.system_prompt or ""
-        prompt += f"\n{context}"
+        Logger.log(f"Generating asynchronous Response using Alpacca model: {self._model}", Priority.NORMAL)
+        prompt = self._make_prompt(prompt)
         Logger.log(f"Prompt: {prompt}", Priority.DEBUG)
-        iterator = await ollama.AsyncClient().generate(model=self.model, options=self.options, prompt=prompt, system=system_prompt, stream=True)
+        iterator = await ollama.AsyncClient().generate(model=self._model, options=self._options, prompt=prompt, stream=True)
         return iterator
 
     def generate_iterable(self, prompt, rag_context: list[str] = None):
@@ -182,15 +184,15 @@ class Alpacca:
         :param rag_context: The context gathered using RAG
         :return: An iterable that generates the response from the model
         """
-        Logger.log(f"Generating Iteratable Response using Alpacca model: {self.model}", Priority.NORMAL)
+        Logger.log(f"Generating iterable Response using Alpacca model: {self._model}", Priority.NORMAL)
         prompt = self._make_prompt(prompt, rag_context=rag_context)
         Logger.log(f"Prompt: {prompt}", Priority.DEBUG)
-        iterator:  GenerateResponse | Iterator[GenerateResponse] = ollama.Client().generate(model=self.model, options=self.options, prompt=prompt, stream=True)
+        iterator:  GenerateResponse | Iterator[GenerateResponse] = self._client.generate(model=self._model, options=self._options, prompt=prompt, stream=True)
         return iterator
 
     def _make_prompt(self, prompt: str, rag_context: list[str] = None) -> str:
-        context = self.use_history and history_string(self.history) or ""
-        system_prompt = self.use_system and self.system_prompt or None
+        context = self._use_history and history_string(self._history) or ""
+        system_prompt = self._use_system and self._system_prompt or None
         if system_prompt and "%RAG%" in system_prompt:
             if rag_context is not None:
                 Logger.log(f"RAG Context: {rag_context}", Priority.NORMAL)
@@ -204,7 +206,7 @@ class Alpacca:
         if system_prompt and "%UserPrompt%" in system_prompt:
             system_prompt = system_prompt.replace("%UserPrompt%", prompt)
 
-        if not self.use_system:
+        if not self._use_system:
             return prompt
         return system_prompt
 
@@ -214,12 +216,12 @@ class Alpacca:
     def add_history(self, user: str, thoughts: str, answer: str):
         """
         Add a chat exchange to the history
-        :param user: The user input prompt
+        :param user: The user's input prompt
         :param thoughts: The thoughts of the model
         :param answer: The answer of the model
         """
-        if self.use_history:
-            self.history.append(ChatExchange(user, thoughts, answer))
+        if self._use_history:
+            self._history.append(ChatExchange(user, thoughts, answer))
         else:
             Logger.log("History is not enabled", Priority.CRITICAL)
             raise Exception("History is not enabled")
@@ -230,14 +232,35 @@ class Alpacca:
         :param history_location: The location of the history file
         :return: True if history was loaded
         """
-        self.history = [chat_exchange_from_dict(d) for d in load_json(history_location, create=True)]
-        self.use_history = True
+        self._history = [chat_exchange_from_dict(d) for d in load_json(history_location, create=True)]
+        self._use_history = True
         return True
+
+    def get_client(self) -> Client:
+        """
+        Get the client of the model
+        :return: The client of the model
+        """
+        return self._client
+
+    def get_model(self) -> str:
+        """
+        Get the model of the Alpacca
+        :return: The model of the Alpacca
+        """
+        return self._model
+
+    def get_history(self) -> List[ChatExchange]:
+        """
+        Get the history of the Alpacca
+        :return: The history of the Alpacca
+        """
+        return self._history
 
 def load_alpacca_from_json(location:str) -> Alpacca:
     """
-    Load an Alpacca model from a json file
-    :param location: The location of the json file
+    Load an Alpacca model from a JSON file
+    :param location: The location of the JSON file
     :return: The Alpacca model
     """
     data = load_json(location)
@@ -247,4 +270,13 @@ def load_alpacca_from_json(location:str) -> Alpacca:
     frequency_penalty = data["frequency_penalty"] if data["frequency_penalty"] else None
     stop = data["stop"] if data["stop"] else None
     identifier = data["identifier"] if data["identifier"] else None
-    return Alpacca(data["model"], temperature=temperature, frequency_penalty=frequency_penalty, stop=stop, system=system, history_location=history, identifier=identifier)
+    remote = data["remote"] if data["remote"] else None
+    return Alpacca(data["model"], temperature=temperature, frequency_penalty=frequency_penalty, stop=stop, system=system, history_location=history, identifier=identifier, host=remote)
+
+def get_models_from_remote(host: str) -> list[str]:
+    """
+    Get the models from a remote host
+    :param host: The host to get the models from
+    :return: The models from the host
+    """
+    return [m["model"] for m in Client(host=host).list().models]
