@@ -1,7 +1,7 @@
 import time
 from math import floor
 from random import random
-from typing import Iterator, List
+from typing import Iterator, List, Any
 import psutil
 
 import ollama
@@ -12,8 +12,9 @@ from textual.reactive import reactive, Reactive
 from textual.widgets import Static, Input, Log, Tabs, Select, Tab
 from textual_plot import PlotWidget
 
-from Core.Alpacca import Alpacca, separate_thoughts, load_alpacca_from_json
+from Core.Alpacca import Alpacca, separate_thoughts, load_alpacca_from_json, RemoteException
 from Core.FileTree import *
+from Core.Logger import Logger
 from Core.MemGraph import Memgraph
 
 
@@ -24,6 +25,7 @@ class UserMessage(Message):
         self.user = user
         super().__init__()
 
+
 class AIResponse(Message):
     response: str
     identifier: str
@@ -32,6 +34,7 @@ class AIResponse(Message):
         self.response = value
         self.identifier = identifier
         super().__init__()
+
 
 class ChatMessage(Message):
     user: str
@@ -47,6 +50,7 @@ class ChatMessage(Message):
 
     def __str__(self):
         return f"You: {self.user}\n\nAlpacca: {self.response}\n"
+
 
 class AiChat(Static):
     lines: Reactive[ChatMessage] = reactive(list, recompose=True)
@@ -130,13 +134,16 @@ class AiChat(Static):
             message.add_part(f"{exchange.thoughts}\n{exchange.answer}")
             self.lines.append(message)
 
+
 class CreateModelMessage(Message):
     def __init__(self, model: str):
         self.model = model
         super().__init__()
 
+
 class CreateModelCanceled(Message):
     pass
+
 
 class ModelSelectScreen(Screen):
     available: List[str] = []
@@ -167,15 +174,52 @@ class ModelSelectScreen(Screen):
             self.app.post_message(CreateModelMessage(self.query_one(Select).value))
             self.app.pop_screen()
 
+
 class MainTabs(Tabs):
     TABS = ["Chats", "Settings", "More"]
+    logger: Log
+    previous_static: Any
+
+    def __init__(self, logger: Log):
+        self.logger = logger
+        super().__init__()
 
     def compose(self) -> ComposeResult:
         yield Tabs(id="main-tabs")
 
     def on_mount(self) -> None:
+        self.collect_previous()
         for tab in self.TABS:
             self.query_one(Tabs).add_tab(Tab(tab))
+
+    def collect_previous(self):
+        widget = self.app.get_widget_by_id("main-container").children[0]
+        if not widget.has_class("Main-Windows"):
+            raise TypeError(f"Expected Main-Windows, got {widget.classes} instead")
+        self.previous_static = widget
+
+    def replace_main_window(self, new_static: Static) -> None:
+        self.app.get_widget_by_id("main-window").remove_children("*")
+        self.app.get_widget_by_id("main-window").mount(new_static)
+
+    @on(Tabs.TabMessage)
+    def on_tab_activated(self, event: Tabs.TabMessage):
+        #self.app.query_one(Log).write_line(str(event.tabs.id))
+        if event.tab.label == "Chats":
+            self.logger.write_line("Selected Chats!")
+            self.collect_previous()
+            self.logger.write_line(self.previous_static.id)
+        elif event.tab.label == "Settings":
+            self.logger.write_line("Selected Settings!")
+            self.collect_previous()
+            self.logger.write_line(self.previous_static.id)
+        elif event.tab.label == "More":
+            self.logger.write_line("Selected More!")
+            self.collect_previous()
+            self.logger.write_line(self.previous_static.id)
+
+        event.stop()  # Stops the following event listeners from receiving the event
+
 
 class ChatTabs(Tabs):
     log: Log = None
@@ -196,11 +240,44 @@ class ChatTabs(Tabs):
             self.query_one(Tabs).add_tab(Tab(self.alpacas[i].identifier, id=f"tab-{i}"))
         self.query_one(Tabs).add_tab(Tab("+", id="add-tab"))
 
+
+class SettingsWindow(Static):
+
+    def __init__(self, logger: Log, alpacas: List[Alpacca]):
+        self.logger = logger
+        self.alpacas = alpacas
+        super().__init__(classes="Main-Windows")
+
+    def compose(self) -> ComposeResult:
+        yield Placeholder()
+
+
+class MainWindow(Static):
+    logger: Log
+
+    def __init__(self, logger: Log, alpacas: List[Alpacca], files: List[str], chats: List[AiChat]):
+        self.logger = logger
+        self.alpacas = alpacas
+        self.files = files
+        self.chats = chats
+        super().__init__(id="main-window", classes="Main-Windows")
+
+    def compose(self) -> ComposeResult:
+        yield ChatTabs(self.logger, self.alpacas, self.files, id="chat-tabs")
+        # yield Tabs("Hello")
+        with VerticalScroll(id="vertical-scroll-content"):
+            yield self.chats[0]
+        with Container(id="side-by-side"):
+            yield Button("+", id="button-add")
+            yield Input(placeholder="Chat with AI: ", type="text", id="chat-input")
+            yield Button("Send", id="send-button")
+
+
 class TextualConsole(App):
     CSS_PATH = "Core/layout.tcss"
     style_logger = Log()
     chat = AiChat(style_logger)
-    std_loc:str = "/Resources/Chats"
+    std_loc: str = "/Resources/Chats"
     std_settings: str = "/Resources/Settings"
     alpacas: List[Alpacca] = []
     chats: List[AiChat] = []
@@ -208,33 +285,28 @@ class TextualConsole(App):
     selected_alpaca_id: int = 0
     file_tree_open: bool = False
     generate_running: reactive[bool] = reactive(False)
+    main_window: MainWindow
+    settings_window: SettingsWindow
+
 
     def __init__(self):
         print("Initializing Textual Console")
         self.alpacas, self.files = self.load_alpacca_models()
-        for alpaca in self.alpacas:
-            self.chats.append(AiChat(log=self.style_logger, identifier=alpaca.identifier, load_from=alpaca))
 
         if len(self.alpacas) == 0:
             print("No alpacas found: Creating default alpacca")
             self.alpacas.append(self.create_default_alpacca())
-            self.chats.append(AiChat(log=self.style_logger, identifier=self.alpacas[0].identifier))
-        else:
-            print("Alpaca found")
+
+        for alpaca in self.alpacas:
+            self.chats.append(AiChat(log=self.style_logger, identifier=alpaca.identifier, load_from=alpaca))
+
         super().__init__()
 
     def compose(self) -> ComposeResult:
-        yield MainTabs()
+        yield MainTabs(self.style_logger)
         with Container(id="app-grid"):
-            with Container(id="main-window"):
-                yield ChatTabs(self.style_logger, self.alpacas, self.files, id="chat-tabs")
-                #yield Tabs("Hello")
-                with VerticalScroll(id="vertical-scroll-content"):
-                    yield self.chats[0]
-                with Container(id="side-by-side"):
-                    yield Button("+", id="button-add")
-                    yield Input(placeholder="Chat with AI: ", type="text", id="chat-input")
-                    yield Button("Send", id="send-button")
+            with Container(id="main-container"):
+                yield MainWindow(logger=self.style_logger, alpacas=self.alpacas, files=self.files, chats=self.chats)
             with Container(id="side-window"):
                 yield Memgraph()
                 #yield Static("Second", classes="debug")
@@ -249,7 +321,7 @@ class TextualConsole(App):
         self.set_interval(1, self.update_sys_info)
 
     def update_sys_info(self):
-        mem = psutil.virtual_memory()[3] / 1_000_000_000 # in GB
+        mem = psutil.virtual_memory()[3] / 1_000_000_000  # in GB
         swap = psutil.swap_memory()[1] / 1_000_000_000
         if self.screen.id == "_default":
             self.app.query_one(Memgraph).append_data_point(time.time(), mem, swap)
@@ -257,8 +329,6 @@ class TextualConsole(App):
     @on(Tabs.TabMessage)
     def on_tab_activated(self, event: Tabs.TabActivated):
         # self.style_logger.write_line(f"Tab Activated! {event.tab.id}")
-        if event.tabs.id == "main-tabs":
-            pass
         if event.tab.id == "add-tab":
             self.style_logger.write_line(f"Add was pressed!")
             self.app.push_screen(ModelSelectScreen(self.style_logger))
@@ -286,7 +356,8 @@ class TextualConsole(App):
     @on(CreateModelMessage)
     def on_create_model(self, event: CreateModelMessage):
         model_str = make_to_model_str(event.model)
-        self.alpacas.append(Alpacca(event.model, history_location=f"{os.getcwd() + self.std_loc}/{model_str}.json", identifier=f"{model_str}"))
+        self.alpacas.append(Alpacca(event.model, history_location=f"{os.getcwd() + self.std_loc}/{model_str}.json",
+                                    identifier=f"{model_str}"))
         self.chats.append(AiChat(log=self.style_logger, identifier=f"{model_str}"))
         self.query_one(ChatTabs).add_tab(Tab(f"{model_str}", id=f"tab-{len(self.chats) - 1}"), before="add-tab")
         self.recompose()
@@ -295,7 +366,8 @@ class TextualConsole(App):
     def create_default_alpacca(self):
         available = ollama.list()
         identifier = make_to_model_str(available.models[0].model)
-        return Alpacca(available.models[0].model, identifier=identifier, history_location=f"{os.getcwd() + self.std_loc}/{identifier}.json")
+        return Alpacca(available.models[0].model, identifier=identifier,
+                       history_location=f"{os.getcwd() + self.std_loc}/{identifier}.json")
 
     def load_alpacca_models(self) -> [List[Alpacca], List[str]]:
         """
@@ -318,8 +390,18 @@ class TextualConsole(App):
         for file in setting_files:
             print(f"Found setting: {file}")
 
+        alpacas = []
         # only return models that have a setting file, history files are auto generated by the Alpacca class
-        alpacas = [load_alpacca_from_json(f"{os.getcwd() + self.std_settings}/{file}") for file in setting_files if file.split(".")[1] == "json"]
+        for file in setting_files:
+            if file.split(".")[1] == "json":
+                Logger.log(f"Loading Alpacca: {file}")
+                try:
+                    alp = load_alpacca_from_json(f"{os.getcwd() + self.std_settings}/{file}")
+                    alpacas.append(alp)
+                except RemoteException as e:
+                    Logger.log(f"Error: {e}")
+                    print(f"Error: {e}")
+
         for alp in alpacas:
             print(f"Loaded Alpacca: {alp}")
 
@@ -328,7 +410,8 @@ class TextualConsole(App):
     def save_chat(self, chat: AiChat):
         if chat.current_line is not None:
             separated = separate_thoughts(chat.current_line.response)
-            self.alpacas[self.selected_alpaca_id].add_history(chat.current_line.user, separated["think"], separated["response"])
+            self.alpacas[self.selected_alpaca_id].add_history(chat.current_line.user, separated["think"],
+                                                              separated["response"])
             self.style_logger.write_line(
                 f"In generate_ai: {chat.current_line.user} {separated['think']} {separated['response']}")
             self.style_logger.write_line(f"Saved history for {self.alpacas[self.selected_alpaca_id].identifier}")
@@ -354,9 +437,9 @@ class TextualConsole(App):
 
         if event.button.id == "button-add":
             if not self.file_tree_open:
-                self.app.get_widget_by_id("main-window").mount(FileTee(os.getcwd()))
+                self.app.get_widget_by_id("main-container").mount(FileTee(os.getcwd()))
             else:
-                self.app.get_widget_by_id("main-window").query_one(FileTee).remove()
+                self.app.get_widget_by_id("main-container").query_one(FileTee).remove()
             self.file_tree_open = not self.file_tree_open
             self.app.recompose()
 
@@ -386,8 +469,10 @@ class TextualConsole(App):
         self.generate_running = False
         self.get_widget_by_id("send-button").disabled = False
 
+
 def make_to_model_str(model: str) -> str:
     return model.replace(".", "_").split(":")[0].replace("/", "_").upper() + str(floor(random() * 99))
+
 
 if __name__ == "__main__":
     app = TextualConsole()

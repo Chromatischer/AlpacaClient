@@ -38,5 +38,5 @@ class Memgraph(PlotWidget):
         self.memory["y"].append(mem_y)
         self.swap["x"].append(time)
         self.swap["y"].append(swap_y)
-        self.plot_data(self.memory, "bright_yellow")
-        self.plot_data(self.swap, "bright_red")
+        #self.plot_data(self.memory, "bright_yellow")
+        #self.plot_data(self.swap, "bright_red")

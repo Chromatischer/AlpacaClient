@@ -1,7 +1,9 @@
 from typing import List, Iterator
 
 import ollama
+import requests
 from ollama import *
+from requests import request, RequestException
 
 from Core.Logger import Logger
 from Core.Priority import Priority
@@ -61,6 +63,13 @@ def history_string(history: List[ChatExchange]) -> str:
         full += partial
     return full
 
+class RemoteException(Exception):
+    def __init__(self, message: str):
+        self.message = message
+
+    def __str__(self):
+        return self.message
+
 class Alpacca:
     _history: List[ChatExchange] # History of messages and responses between the user and the model
     _history_location: str # The location of the history file
@@ -78,6 +87,8 @@ class Alpacca:
             self._client = Client(host=host)
             self._remote = host
             self._use_remote = True
+            if not self.check_connection():
+                raise RemoteException(f"Connection failed for remote: {host}! Please check the connection and try again.")
         self._stop = stop
         self._options = {"temperature": temperature, "frequency_penalty": frequency_penalty, "stop": stop}
         if system is not None:
@@ -98,6 +109,16 @@ class Alpacca:
 
     def __str__(self):
         return f"Alpacca model of: {self._model}"
+
+    def check_connection(self):
+        try:
+            if self._use_remote:
+                response = requests.get(self._remote, timeout=5)
+            else:
+                response = requests.get("0.0.0.0:11434", timeout=5)
+        except RequestException:
+            return False
+        return response == "Ollama is running"
 
     def generate(self, prompt) -> ChatResponse:
         """
@@ -270,7 +291,7 @@ def load_alpacca_from_json(location:str) -> Alpacca:
     frequency_penalty = data["frequency_penalty"] if data["frequency_penalty"] else None
     stop = data["stop"] if data["stop"] else None
     identifier = data["identifier"] if data["identifier"] else None
-    remote = data["remote"] if data["remote"] else None
+    remote = data["remote"] if data["remote"] != "Disabled" else None
     return Alpacca(data["model"], temperature=temperature, frequency_penalty=frequency_penalty, stop=stop, system=system, history_location=history, identifier=identifier, host=remote)
 
 def get_models_from_remote(host: str) -> list[str]:
