@@ -2,29 +2,41 @@ from math import ceil
 from typing import Any
 
 import chromadb
+import ollama
 from chromadb import Settings
 from chromadb.types import Collection
 from ollama import Client, EmbedResponse
 from pypdf import PdfReader
 
 from Core.Logger import Logger
+from Core.OllamaHelper import check_ollama_server, get_all_models
 from Core.Priority import Priority
 from Utils.FileLoader import save_json, load_json
 
 
 class Embedding:
     # A class to handle embedding models basing on the ollama API library
-    model: str
-    client: Client
-    collection: Collection
-    embedding_length: int
-    collection_name: str
+    _model: str
+    _client: Client
+    _collection: Collection
+    _embedding_length: int
+    _collection_name: str
 
-    def __init__(self, model: str, db_path: str | None = None, embedding_length: int = 512, collection_name: str = "embeddings"):
-        self.model = model
-        self.embedding_length = embedding_length
-        self.client = Client()
-        self.collection_name = collection_name
+    def __init__(self, model: str, db_path: str | None = None, embedding_length: int = 512, collection_name: str = "embeddings", remote: str = None):
+        assert embedding_length > 0, "The embedding length must be greater than 0"
+        self._embedding_length = embedding_length
+
+        self._client = Client()
+        if remote is not None:
+            if not check_ollama_server(remote):
+                raise ValueError("The ollama server is not running on the remote host")
+            self._client = Client(remote=remote)
+
+        assert model in get_all_models(host=remote), f"Model {model} not found in the ollama API"
+        self._model = model
+
+        self._collection_name = collection_name
+
         Logger.log("Connected to the ollama API", priority=Priority.NORMAL)
 
         if db_path is not None:
@@ -36,18 +48,18 @@ class Embedding:
 
         success = True
         try:
-            self.collection = self.db_client.get_collection(self.collection_name)
+            self._collection = self.db_client.get_collection(self._collection_name)
         except Exception as e:
             print("Error:", e)
             success = False
             Logger.log("Failed to load embeddings", priority=Priority.NORMAL)
-            self.collection = self.db_client.create_collection(self.collection_name)
+            self._collection = self.db_client.create_collection(self._collection_name)
             #Logger.log("Created new collection!", priority=Priority.HIGH)
 
-        Logger.log(f"{success and 'Loaded' or 'Created'} Collection: [{self.collection_name}]", priority=Priority.HIGH)
+        Logger.log(f"{success and 'Loaded' or 'Created'} Collection: [{self._collection_name}]", priority=Priority.HIGH)
 
-        if not any((model in m["model"]) for m in self.client.list().models):
-            for m in self.client.list().models:
+        if not any((model in m["model"]) for m in self._client.list().models):
+            for m in self._client.list().models:
                 print(m["model"], model, model in m["model"])
             raise ValueError(f"Model {model} not found in the ollama API")
 
@@ -59,10 +71,10 @@ class Embedding:
         :param text: The text to embed
         :return: The embedding of the text
         """
-        return self.client.embed(self.model, text)["embeddings"]
+        return self._client.embed(self._model, text)["embeddings"]
 
     def __len__(self) -> int:
-        return self.collection.count()
+        return self._collection.count()
 
     def save_to_collection(self,text: str, embedding: list[float], source: str = "None"):
         """
@@ -71,7 +83,7 @@ class Embedding:
         :param embedding: The embedding of the text
         :param source: Optional source of the text
         """
-        self.collection.add(ids=[str(len(self))], embeddings=embedding, documents=[text], metadatas=[{"source": source}])
+        self._collection.add(ids=[str(len(self))], embeddings=embedding, documents=[text], metadatas=[{"source": source}])
 
     def embed_file(self, file_path: str, overlap: int = 0):
         """
@@ -82,7 +94,7 @@ class Embedding:
         with open(file_path, "rb") as file:
             Logger.log(f"Embedding content of file: {file_path}", priority=Priority.NORMAL)
             content = file.read().decode("utf-8")
-            self._embed_long(content, file_path, token_count=self.embedding_length, overlap=overlap)
+            self._embed_long(content, file_path, token_count=self._embedding_length, overlap=overlap)
 
     def _embed_long(self, content: str, source_str: str, token_count: int = 512, overlap: int = 0, auto_balance: bool = True):
         """
@@ -109,8 +121,8 @@ class Embedding:
             embedding = self.embed(chunk)  # Embed the chunk
             # The embedding is stored in the database with the id of the chunk and the path to the document for
             # future reference and manual lookup
-            self.collection: Collection
-            self.collection.add(ids=[str(i)], embeddings=embedding, documents=chunk, metadatas=[{"source": source_str}])
+            self._collection: Collection
+            self._collection.add(ids=[str(i)], embeddings=embedding, documents=chunk, metadatas=[{"source": source_str}])
 
     def embed_pdf(self, pdf_path: str, overlap: int = 0):
         """
@@ -124,7 +136,7 @@ class Embedding:
         Logger.log(f"Embedding content of pdf: {pdf_path}", priority=Priority.NORMAL)
         for page in reader.pages:
             Logger.log(f"Page: {page} / {reader.pages}", priority=Priority.NORMAL)
-            self._embed_long(content=page.extract_text(), source_str=pdf_path, token_count=self.embedding_length, overlap=overlap)
+            self._embed_long(content=page.extract_text(), source_str=pdf_path, token_count=self._embedding_length, overlap=overlap)
 
     # noinspection SpellCheckingInspection
     def query_by_embedding(self, embedding: list[float], number_of_results: int = 1) -> dict:
@@ -134,7 +146,7 @@ class Embedding:
         :param number_of_results: The number of results to return
         :return: The results of the query {"ids": [id], "documents": [document], "uris": [uri], "data": [data], "metadatas": [metadata], "distances": [distance], "included": [included]}
         """
-        return self.collection.query(query_embeddings=embedding, n_results=number_of_results)
+        return self._collection.query(query_embeddings=embedding, n_results=number_of_results)
 
     def query_document_by_embedding(self, embedding: list[float], number_of_results: int = 1) -> str:
         """
@@ -144,4 +156,3 @@ class Embedding:
         :return: String of the document that was embedded and best fits the query
         """
         return self.query_by_embedding(embedding, number_of_results=number_of_results)["documents"][0][0]
-

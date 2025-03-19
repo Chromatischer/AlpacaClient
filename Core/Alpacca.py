@@ -8,6 +8,7 @@ from ollama import *
 from requests import request, RequestException
 
 from Core.Logger import Logger
+from Core.OllamaHelper import check_ollama_server, get_all_models
 from Core.Priority import Priority
 from Utils.FileLoader import load_from_file, load_json, save_json
 
@@ -32,6 +33,8 @@ VALID_PARAMETERS = [
     {"name": "top_p", "type": float, "min": 0, "max": 1, "default": 0.9,
      "description": "A lower value makes the model more conservative in it's answers."},
 ]
+
+SAVE_VERSION = 0.2
 
 def separate_thoughts(string: str) -> dict[str, str]:
     """
@@ -96,13 +99,12 @@ class RemoteException(Exception):
 class Alpacca:
     _history: List[ChatExchange] # History of messages and responses between the user and the model
     _history_location: str # The location of the history file
-    context: [[int]] = [] # The context of the conversation
+    _context: [[int]] = [] # The context of the conversation
     _remote: str = None
     _use_remote: bool = False # If the model is remote
     _options: dict = {}
 
     def __init__(self, model: str, previous_history: [ChatExchange] = None, system: str = None, history_location: str = None, identifier: str = None, host: str = None, options: dict = None, **kwargs):
-        self._model = model # The model to use
         self._history = previous_history
         self._history_location = history_location
         self.identifier = identifier
@@ -113,6 +115,9 @@ class Alpacca:
             self._use_remote = True
             if not self.check_connection():
                 raise RemoteException(f"Connection failed for remote: {host}! Please check the connection and try again.")
+
+        assert model in get_all_models(self._remote), f"Model '{model}' not found in the list of available models!"
+        self._model = model
 
         if options is not None:
             self._options.update(options)
@@ -144,17 +149,7 @@ class Alpacca:
         Check if the connection to a remote host is successful
         :return: True if the connection is successful
         """
-        try:
-            if self._use_remote:
-                response = requests.get(f"http://{self._remote}", timeout=5)
-                Logger.log(f"Response: {response}", Priority.NORMAL)
-                Logger.log(f"Response: {response.text}", Priority.NORMAL)
-            else:
-                response = requests.get("0.0.0.0:11434", timeout=5)
-        except Exception as e:
-            Logger.log(f"Exception: {e}", Priority.NORMAL)
-            return False
-        return response.text.strip().upper() == "OLLAMA IS RUNNING"
+        return check_ollama_server(self._remote)
 
     def generate(self, prompt) -> ChatResponse:
         """
@@ -167,7 +162,7 @@ class Alpacca:
         prompt = self._make_prompt(prompt)
         Logger.log(f"Prompt: {prompt}", Priority.DEBUG)
         response: ChatResponse = self._client.generate(model=self._model, options=self._options, prompt=prompt)
-        self.context.append(response)
+        self._context.append(response)
         print(response.context)
 
         lama_response = separate_thoughts(response["response"])
@@ -202,9 +197,9 @@ class Alpacca:
         :return: The settings of the model as a dictionary
         """
         return {
+            "version": SAVE_VERSION,
             "model": self._model,
             "options": self._options,
-            "stop": self._options["stop"],
             "system": self._system_prompt_location if self._use_system else "Disabled",
             "history": self._history_location if self._use_history else "Disabled",
             "identifier": self.identifier,
@@ -217,6 +212,18 @@ class Alpacca:
         :return: The options of the model
         """
         return self._options
+
+    def get_option(self, key: str) -> Any:
+        """
+        Get an option of the model
+        :param key: The option to get
+        :return: The value of the option
+        """
+        try:
+            return self._options[key]
+        except KeyError:
+            Logger.log(f"Option '{key}' not found, reporting default!", Priority.CRITICAL)
+            return list(filter(lambda x: x["name"] == key, VALID_PARAMETERS))[0]["default"]
 
     def set_option(self, key: str, value: Any) -> bool:
         """
@@ -369,19 +376,13 @@ def load_alpacca_from_json(location:str) -> Alpacca:
     :return: The Alpacca model
     """
     data = load_json(location)
+    if data["version"] != SAVE_VERSION:
+        Logger.log(f"Version mismatch! Expected {SAVE_VERSION} but got {data['version']}", Priority.CRITICAL)
+        raise ValueError(f"Version mismatch! Expected {SAVE_VERSION} but got {data['version']}")
     system = data["system"] if data["system"] != "Disabled" else None
     history = data["history"] if data["history"] != "Disabled" else None
     options = data["options"] if data["options"] != "Disabled" else None
-    stop = data["stop"] if data["stop"] else None
     identifier = data["identifier"] if data["identifier"] else None
     remote = data["remote"] if data["remote"] != "Disabled" else None
-    return Alpacca(data["model"], stop=stop, system=system, history_location=history, identifier=identifier,
+    return Alpacca(data["model"], system=system, history_location=history, identifier=identifier,
                    host=remote, options=options)
-
-def get_models_from_remote(host: str) -> list[str]:
-    """
-    Get the models from a remote host
-    :param host: The host to get the models from
-    :return: The models from the host
-    """
-    return [m["model"] for m in Client(host=host).list().models]

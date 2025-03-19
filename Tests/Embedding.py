@@ -4,17 +4,18 @@ from Core.Embedding import Embedding
 from Core.Logger import Logger
 from Core.Priority import Priority
 
+MODEL = "nomic-embed-text:latest"
 
 class SimpleTests(unittest.TestCase):
     embedding: Embedding
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.embedding = Embedding("nomic-embed-text", embedding_length=100)
+        cls.embedding = Embedding(MODEL, embedding_length=100)
         print("setup complete!")
 
     def test_innit(self):
-        embedder = Embedding("nomic-embed-text")
+        embedder = Embedding(MODEL)
         print("Embedder: Created")
 
     def test_embedding(self):
@@ -37,16 +38,16 @@ class SimpleTests(unittest.TestCase):
 class PersistenceTests(unittest.TestCase):
     path: str = "/Users/chromatischer/PycharmProjects/AI-Assist/Resources"
     def test_persistence(self):
-        persist_datab = Embedding("nomic-embed-text", db_path=self.path)
+        persist_datab = Embedding(MODEL, db_path=self.path)
         emb = persist_datab.embed("Hello, how are you?")
         persist_datab.save_to_collection(text="Hello, how are you?", embedding=emb)
         Logger.log(str(len(persist_datab)))
-        second = Embedding("nomic-embed-text", db_path=self.path)
+        second = Embedding(MODEL, db_path=self.path)
         print(f"{second.query_by_embedding(second.embed('Hello, how are you?'))}")
 
 class PdfEmbeddingTests(unittest.TestCase):
     def test_embedding_pdf(self):
-        embedding = Embedding("nomic-embed-text", embedding_length=50)
+        embedding = Embedding(MODEL, embedding_length=50)
         embedding.embed_pdf("/Users/chromatischer/PycharmProjects/AI-Assist/Temp/Motivationsschreiben.pdf", overlap=5)
         Logger.log(str(len(embedding)), priority=Priority.NORMAL)
         query = embedding.embed("Which clubs are you in?")

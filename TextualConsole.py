@@ -23,6 +23,7 @@ from Core.Alpacca import Alpacca, separate_thoughts, load_alpacca_from_json, Rem
 from Core.FileTree import *
 from Core.Logger import Logger
 from Core.MemGraph import Memgraph
+from Core.OllamaHelper import make_to_model_str
 
 
 class UserMessage(Message):
@@ -157,8 +158,8 @@ class ModelSelectScreen(Screen):
 
     def __init__(self, logger: Log):
         for model in ollama.list().models:
-            self.available.append(model.model)
-            logger.write_line(model.model)
+            self.available.append(model._model)
+            logger.write_line(model._model)
 
         super().__init__()
 
@@ -245,9 +246,9 @@ class NumberRangeValidator(Validator):
         except ValueError:
             return self.failure(f"Value: {value} is not a valid number!")
 
-        if self.min < casted < self.max:
-            return self.success()
-        return self.failure(f"Value: {value} is out of range: {min} <= {value} <= {max}!")
+        if casted < self.min or casted > self.max:
+            return self.failure(f"Value: {value} is out of range: {min} <= {value} <= {max}!")
+        return self.success()
 
 
 class ChatTabs(Tabs):
@@ -281,7 +282,7 @@ class SettingsWindow(Static):
     def compose(self) -> ComposeResult:
         with Container(id="settings"):
             with Container(classes="settings-row"):
-                yield Static("[bold] Temperature [/bold]", classes="settings-label")
+                yield Static("Temperature:", classes="settings-label")
                 with HorizontalGroup():
                     yield Input(placeholder="Temperature", type="number", valid_empty=False, validators=NumberRangeValidator(0, 2), id="temperature-input")
                     yield Button("Apply", id="temperature-apply", disabled=True)
@@ -324,7 +325,7 @@ class SettingsWindow(Static):
             f"{mentions}-apply"))
         #self.logger.write_line(f"Input Changed: {event.input.id}, to: {event.input.value}, valid: {event.validation_result.is_valid}")
 
-        if event.validation_result.is_valid and not event.input == self.alpacas[self.selected_alpaca_id].get_options()[mentions]:
+        if event.validation_result.is_valid and not event.input == self.alpacas[self.selected_alpaca_id].get_option(mentions):
             corresponding_button.disabled = False
         else:
             corresponding_button.disabled = True
@@ -334,11 +335,8 @@ class SettingsWindow(Static):
         typing.cast(Input, self.get_widget_by_id(f"{mentions}-input")).clear()
 
     def update_placeholder(self, mentions: str):
-        typing.cast(Input, self.get_widget_by_id(f"{mentions}-input")).placeholder = f"{mentions.strip().replace('_', ' ').capitalize()}: {self.alpacas[self.selected_alpaca_id].get_options()[mentions]}"
-        val = self.alpacas[self.selected_alpaca_id].get_options()[mentions]
-        cast_to = VALID_PARAMETERS[[p['name'] for p in VALID_PARAMETERS].index(mentions)]['type']
-        self.logger.write_line(f"Updated placeholder for {val} with type: {type(val)} should be: {VALID_PARAMETERS[[p['name'] for p in VALID_PARAMETERS].index(mentions)]['type']}")
-        self.logger.write_line(f"{typing.cast(cast_to, val)} {type(typing.cast(cast_to, val))}")
+        typing.cast(Input, self.get_widget_by_id(f"{mentions}-input")).placeholder = f"{mentions.strip().replace('_', ' ').capitalize()}: {self.alpacas[self.selected_alpaca_id].get_option(mentions)}"
+        val = self.alpacas[self.selected_alpaca_id].get_option(mentions)
         #How do I do intelligent type casting in python, Assume dict with key and value being type to cast to and value to cast
 
 
@@ -493,6 +491,10 @@ class TextualConsole(App):
                 except RemoteException as e:
                     Logger.log(f"Error: {e}")
                     print(f"Error: {e}")
+                except ValueError as e:
+                    Logger.log(f"Error: {e}")
+                    print(f"Error: {e}")
+                    continue
 
         for alp in alpacas:
             print(f"Loaded Alpacca: {alp}")
@@ -570,11 +572,6 @@ class TextualConsole(App):
             # TODO: Fix the scrolling issue
         self.generate_running = False
         self.get_widget_by_id("send-button").disabled = False
-
-
-def make_to_model_str(model: str) -> str:
-    return model.replace(".", "_").split(":")[0].replace("/", "_").upper() + str(floor(random() * 99))
-
 
 if __name__ == "__main__":
     app = TextualConsole()
