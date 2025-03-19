@@ -1,4 +1,6 @@
-from typing import List, Iterator
+import math
+import typing
+from typing import List, Iterator, Any
 
 import ollama
 import requests
@@ -9,6 +11,27 @@ from Core.Logger import Logger
 from Core.Priority import Priority
 from Utils.FileLoader import load_from_file, load_json, save_json
 
+
+VALID_PARAMETERS = [
+    {"name": "temperature", "type": float, "min": 0, "max": 2, "default": 0.8,
+     "description": "Controls the randomness of the model. Lower values make the model more deterministic."},
+    {"name": "frequency_penalty", "type": float, "min": 0, "max": 2, "default": 0.0,
+     "description": "Controls the length of the response. Lower values make the model more verbose."},
+    #{"name": "stop", "type": list[str],
+    # "description": "A list of strings that the model will stop generating at."},
+    {"name": "num_ctx", "type": int, "min": 2048, "max": math.inf, "default": 4096,
+     "description": "The number of context messages to use."},
+    {"name": "repeat_penalty", "type": float, "min": 0, "max": 2, "default": 1.1,
+     "description": "Controls the repetition of the model. Lower values make the model less repetitive. Disabled if repeat_last_n is -1."},
+    {"name": "repeat_last_n", "type": int, "min": -1, "max": math.inf, "default": 64,
+     "description": "Controls the window size to check for repetition. -1 disables repeat_penalty."},
+    {"name": "num_predict", "type": int, "min": -2, "max": math.inf, "default": 128, # -2 fills the context window and -1 means no limit
+     "description": "The maximum number of tokens to predict. -1 means no limit. -2 fills the context window."},
+    {"name": "top_k", "type": int, "min": 1, "max": 100, "default": 40,
+     "description": "A lower value makes the model more conservative in it's answers."},
+    {"name": "top_p", "type": float, "min": 0, "max": 1, "default": 0.9,
+     "description": "A lower value makes the model more conservative in it's answers."},
+]
 
 def separate_thoughts(string: str) -> dict[str, str]:
     """
@@ -76,8 +99,9 @@ class Alpacca:
     context: [[int]] = [] # The context of the conversation
     _remote: str = None
     _use_remote: bool = False # If the model is remote
+    _options: dict = {}
 
-    def __init__(self, model: str, previous_history: [ChatExchange] = None, temperature: float = 1, frequency_penalty: float = 0, stop: [str] = None, system: str = None, history_location: str = None, identifier: str = None, host: str = None):
+    def __init__(self, model: str, previous_history: [ChatExchange] = None, system: str = None, history_location: str = None, identifier: str = None, host: str = None, options: dict = None, **kwargs):
         self._model = model # The model to use
         self._history = previous_history
         self._history_location = history_location
@@ -89,8 +113,13 @@ class Alpacca:
             self._use_remote = True
             if not self.check_connection():
                 raise RemoteException(f"Connection failed for remote: {host}! Please check the connection and try again.")
-        self._stop = stop
-        self._options = {"temperature": temperature, "frequency_penalty": frequency_penalty, "stop": stop}
+
+        if options is not None:
+            self._options.update(options)
+
+        for key, value in kwargs.items():
+            self.set_option(key, value)
+
         if system is not None:
             self._system_prompt_location = system
             self._system_prompt = load_from_file(system)
@@ -110,15 +139,22 @@ class Alpacca:
     def __str__(self):
         return f"Alpacca model of: {self._model}"
 
-    def check_connection(self):
+    def check_connection(self) -> bool:
+        """
+        Check if the connection to a remote host is successful
+        :return: True if the connection is successful
+        """
         try:
             if self._use_remote:
-                response = requests.get(self._remote, timeout=5)
+                response = requests.get(f"http://{self._remote}", timeout=5)
+                Logger.log(f"Response: {response}", Priority.NORMAL)
+                Logger.log(f"Response: {response.text}", Priority.NORMAL)
             else:
                 response = requests.get("0.0.0.0:11434", timeout=5)
-        except RequestException:
+        except Exception as e:
+            Logger.log(f"Exception: {e}", Priority.NORMAL)
             return False
-        return response == "Ollama is running"
+        return response.text.strip().upper() == "OLLAMA IS RUNNING"
 
     def generate(self, prompt) -> ChatResponse:
         """
@@ -139,7 +175,7 @@ class Alpacca:
         if self._use_history: self._history.append(ChatExchange(user_question, lama_response["think"], lama_response["response"]))
         return response
 
-    def save_history(self):
+    def save_history(self) -> None:
         """
         Save the history to a file
         """
@@ -160,17 +196,63 @@ class Alpacca:
         save_json(self.settings_to_dict(), location)
         Logger.log("Settings saved", Priority.NORMAL)
 
-    def settings_to_dict(self):
+    def settings_to_dict(self) -> dict:
+        """
+        Get the settings of the model as a dictionary
+        :return: The settings of the model as a dictionary
+        """
         return {
             "model": self._model,
-            "temperature": self._options["temperature"],
-            "frequency_penalty": self._options["frequency_penalty"],
+            "options": self._options,
             "stop": self._options["stop"],
             "system": self._system_prompt_location if self._use_system else "Disabled",
             "history": self._history_location if self._use_history else "Disabled",
             "identifier": self.identifier,
             "remote": self._remote if self._use_remote else "Disabled"
         }
+
+    def get_options(self) -> dict:
+        """
+        Get the options of the model
+        :return: The options of the model
+        """
+        return self._options
+
+    def set_option(self, key: str, value: Any) -> bool:
+        """
+        Set an option of the model with a specific value from the VALID_PARAMETERS
+        :param key: The option to set (of the VALID_PARAMETERS)
+        :param value: The value to set the option to
+        :return: True if the option was set successfully
+        """
+        if key not in [p["name"] for p in VALID_PARAMETERS]:
+            Logger.log(f"Option '{key}' is not a valid parameter", Priority.CRITICAL)
+            raise ValueError(f"Option '{key}' is not a valid parameter")
+
+        Logger.log(f"Option {key} is {key in self._options and '' or 'not'} currently in the options",
+                   Priority.CRITICAL)
+
+        parameter: dict = list(filter(lambda x: x["name"] == key, VALID_PARAMETERS))[0]
+        try:
+            cast_type: type = parameter["type"]
+            cast_value: cast_type = cast_type(value) # Cast the value to the type of the parameter
+
+            # Check out of bounds
+            if parameter["min"] > cast_value or cast_value > parameter["max"]:
+                Logger.log(f"Option {key} could not be set to {value}, out of range: {parameter['min']} < {value} < {parameter['max']}", Priority.CRITICAL)
+                raise ValueError(f"Expected value between {parameter['min']} and {parameter['max']} but got {value}")
+
+            self._options[key]: cast_type = cast_value # Set the option
+            assert type(self._options[key]) == cast_type # Sanity check
+
+            Logger.log(f"Option {key} set to {value}, Attempting type: {cast_type}", Priority.NORMAL)
+            Logger.log(f"Option {key} set to {value}", Priority.NORMAL)
+            return True
+        except TypeError:
+            Logger.log(
+                f"Option {key} could not be set to {value}, type mismatch: {type(self._options[key])} is not {type(value)}",
+                Priority.CRITICAL)
+            raise TypeError(f"Expected type {type(self._options[key])} but got {type(value)}")
 
     def set_system_prompt(self, prompt_file_location: str) -> None:
         """
@@ -180,10 +262,6 @@ class Alpacca:
         self._system_prompt_location = prompt_file_location
         self._system_prompt = load_from_file(prompt_file_location)
         self._use_system = True
-
-    def generate_name(self):
-        parts = self._history_location.split("/")
-        return parts[len(parts) - 1].replace(".json", "").strip().upper()
 
     async def generate_async(self, prompt):
         """
@@ -232,6 +310,12 @@ class Alpacca:
         return system_prompt
 
     def get_system_prompt_now(self, rag_context: list[str] = None, prompt: str = "") -> str:
+        """
+        Get what the ollama model would receive as a prompt if were to generate a response now
+        :param rag_context: The context gathered using RAG
+        :param prompt: The prompt to generate a response from
+        :return: The prompt that the model would receive
+        """
         return self._make_prompt(prompt, rag_context)
 
     def add_history(self, user: str, thoughts: str, answer: str):
@@ -287,12 +371,12 @@ def load_alpacca_from_json(location:str) -> Alpacca:
     data = load_json(location)
     system = data["system"] if data["system"] != "Disabled" else None
     history = data["history"] if data["history"] != "Disabled" else None
-    temperature = data["temperature"] if data["temperature"] else None
-    frequency_penalty = data["frequency_penalty"] if data["frequency_penalty"] else None
+    options = data["options"] if data["options"] != "Disabled" else None
     stop = data["stop"] if data["stop"] else None
     identifier = data["identifier"] if data["identifier"] else None
     remote = data["remote"] if data["remote"] != "Disabled" else None
-    return Alpacca(data["model"], temperature=temperature, frequency_penalty=frequency_penalty, stop=stop, system=system, history_location=history, identifier=identifier, host=remote)
+    return Alpacca(data["model"], stop=stop, system=system, history_location=history, identifier=identifier,
+                   host=remote, options=options)
 
 def get_models_from_remote(host: str) -> list[str]:
     """

@@ -1,4 +1,5 @@
 import time
+import typing
 from math import floor
 from random import random
 from typing import Iterator, List, Any
@@ -6,13 +7,19 @@ import psutil
 
 import ollama
 from ollama import GenerateResponse
+from rich.console import RichCast
 from textual import work
-from textual.containers import VerticalScroll
+from textual.color import Color
+from textual.containers import VerticalScroll, HorizontalGroup
+from textual.content import Content
 from textual.reactive import reactive, Reactive
+from textual.style import Style
+from textual.validation import Validator, ValidationResult
+from textual.widget import Widget
 from textual.widgets import Static, Input, Log, Tabs, Select, Tab
 from textual_plot import PlotWidget
 
-from Core.Alpacca import Alpacca, separate_thoughts, load_alpacca_from_json, RemoteException
+from Core.Alpacca import Alpacca, separate_thoughts, load_alpacca_from_json, RemoteException, VALID_PARAMETERS
 from Core.FileTree import *
 from Core.Logger import Logger
 from Core.MemGraph import Memgraph
@@ -178,47 +185,69 @@ class ModelSelectScreen(Screen):
 class MainTabs(Tabs):
     TABS = ["Chats", "Settings", "More"]
     logger: Log
-    previous_static: Any
+    settings: Static
+    chats: Static
 
-    def __init__(self, logger: Log):
+    def __init__(self, logger: Log, settings: Static, chats: Static):
         self.logger = logger
+        self.settings = settings
+        self.chats = chats
         super().__init__()
 
     def compose(self) -> ComposeResult:
         yield Tabs(id="main-tabs")
 
     def on_mount(self) -> None:
-        self.collect_previous()
         for tab in self.TABS:
             self.query_one(Tabs).add_tab(Tab(tab))
 
-    def collect_previous(self):
-        widget = self.app.get_widget_by_id("main-container").children[0]
-        if not widget.has_class("Main-Windows"):
-            raise TypeError(f"Expected Main-Windows, got {widget.classes} instead")
-        self.previous_static = widget
-
     def replace_main_window(self, new_static: Static) -> None:
-        self.app.get_widget_by_id("main-window").remove_children("*")
-        self.app.get_widget_by_id("main-window").mount(new_static)
+
+        children = self.app.get_widget_by_id("main-container").children
+        for child in children:
+            self.logger.write_line(f"Removed: {child.id}")
+        self.app.get_widget_by_id("main-container").remove_children()
+        #self.logger.write_line(f"Removed children!")
+        self.app.get_widget_by_id("main-container").mount(new_static)
+        self.logger.write_line(f"Mounted new static: {new_static.id}")
+        #self.logger.write_line(f"static: {new_static.id}")
+        self.app.recompose()
 
     @on(Tabs.TabMessage)
     def on_tab_activated(self, event: Tabs.TabMessage):
         #self.app.query_one(Log).write_line(str(event.tabs.id))
+        self.logger.write_line("-----------")
         if event.tab.label == "Chats":
             self.logger.write_line("Selected Chats!")
-            self.collect_previous()
-            self.logger.write_line(self.previous_static.id)
+            self.replace_main_window(new_static=self.chats)
         elif event.tab.label == "Settings":
             self.logger.write_line("Selected Settings!")
-            self.collect_previous()
-            self.logger.write_line(self.previous_static.id)
+            self.replace_main_window(new_static=self.settings)
         elif event.tab.label == "More":
             self.logger.write_line("Selected More!")
-            self.collect_previous()
-            self.logger.write_line(self.previous_static.id)
 
         event.stop()  # Stops the following event listeners from receiving the event
+
+
+class NumberRangeValidator(Validator):
+    min: float
+    max: float
+
+    def __init__(self, min_valid: float, max_valid: float):
+        self.min = min_valid
+        self.max = max_valid
+        super().__init__()
+
+    def validate(self, value: float) -> ValidationResult:
+        casted: float = 0.0
+        try:
+            casted = float(value)
+        except ValueError:
+            return self.failure(f"Value: {value} is not a valid number!")
+
+        if self.min < casted < self.max:
+            return self.success()
+        return self.failure(f"Value: {value} is out of range: {min} <= {value} <= {max}!")
 
 
 class ChatTabs(Tabs):
@@ -243,13 +272,74 @@ class ChatTabs(Tabs):
 
 class SettingsWindow(Static):
 
-    def __init__(self, logger: Log, alpacas: List[Alpacca]):
+    def __init__(self, logger: Log, alpacas: List[Alpacca], selected_alpaca_id: int):
         self.logger = logger
         self.alpacas = alpacas
-        super().__init__(classes="Main-Windows")
+        self.selected_alpaca_id = selected_alpaca_id
+        super().__init__(id="settings-window", classes="Main-Windows")
 
     def compose(self) -> ComposeResult:
-        yield Placeholder()
+        with Container(id="settings"):
+            with Container(classes="settings-row"):
+                yield Static("[bold] Temperature [/bold]", classes="settings-label")
+                with HorizontalGroup():
+                    yield Input(placeholder="Temperature", type="number", valid_empty=False, validators=NumberRangeValidator(0, 2), id="temperature-input")
+                    yield Button("Apply", id="temperature-apply", disabled=True)
+            with Container(classes="settings-row"):
+                yield Static("Frequency Penalty:")
+                with HorizontalGroup():
+                    yield Input(placeholder="Frequency Penalty", type="number", valid_empty=False, validators=NumberRangeValidator(0, 2), id="frequency_penalty-input")
+                    yield Button("Apply", id="frequency_penalty-apply", disabled=True)
+        yield Button("Add", id="add-settings-modifier")
+
+    def on_mount(self):
+        self.update_placeholder("temperature")
+        self.update_placeholder("frequency_penalty")
+
+    def on_button_pressed(self, event: Button.Pressed):
+        if event.button.parent.id == "settings":
+            self.logger.write_line(f"Button Pressed: {event.button.id}")
+            mentions: str = event.button.id.split("-")[0].strip()
+            self.logger.write_line(f"Button for: {mentions} pressed!")
+            corresponding_input: Input = typing.cast(Input, self.get_widget_by_id(f"{mentions}-input"))
+            self.alpacas[self.selected_alpaca_id].set_option(mentions, corresponding_input.value)
+            self.logger.write_line(f"Changed option: {mentions} for {self.alpacas[self.selected_alpaca_id].identifier} to: {self.alpacas[self.selected_alpaca_id].get_options()[mentions]}!")
+            self.clear_input(mentions=mentions)
+            self.update_placeholder(mentions=mentions)
+        event.stop()
+
+    def on_input_submitted(self, event: Input.Submitted):
+        mentions: str = event.input.id.split("-")[0].strip()
+        self.logger.write_line(f"Input for: {mentions} submitted!")
+        if event.validation_result.is_valid:
+            self.alpacas[self.selected_alpaca_id].set_option(mentions, event.input.value)
+            self.logger.write_line(f"Changed option: {mentions} for {self.alpacas[self.selected_alpaca_id].identifier} to: {self.alpacas[self.selected_alpaca_id].get_options()[mentions]}!")
+        self.clear_input(mentions=mentions)
+        self.update_placeholder(mentions=mentions)
+        event.stop()
+
+    def on_input_changed(self, event: Input.Changed):
+        mentions: str = event.input.id.split('-')[0].strip()
+        corresponding_button: Button = typing.cast(Button, self.get_widget_by_id(
+            f"{mentions}-apply"))
+        #self.logger.write_line(f"Input Changed: {event.input.id}, to: {event.input.value}, valid: {event.validation_result.is_valid}")
+
+        if event.validation_result.is_valid and not event.input == self.alpacas[self.selected_alpaca_id].get_options()[mentions]:
+            corresponding_button.disabled = False
+        else:
+            corresponding_button.disabled = True
+        event.stop()
+
+    def clear_input(self, mentions: str):
+        typing.cast(Input, self.get_widget_by_id(f"{mentions}-input")).clear()
+
+    def update_placeholder(self, mentions: str):
+        typing.cast(Input, self.get_widget_by_id(f"{mentions}-input")).placeholder = f"{mentions.strip().replace('_', ' ').capitalize()}: {self.alpacas[self.selected_alpaca_id].get_options()[mentions]}"
+        val = self.alpacas[self.selected_alpaca_id].get_options()[mentions]
+        cast_to = VALID_PARAMETERS[[p['name'] for p in VALID_PARAMETERS].index(mentions)]['type']
+        self.logger.write_line(f"Updated placeholder for {val} with type: {type(val)} should be: {VALID_PARAMETERS[[p['name'] for p in VALID_PARAMETERS].index(mentions)]['type']}")
+        self.logger.write_line(f"{typing.cast(cast_to, val)} {type(typing.cast(cast_to, val))}")
+        #How do I do intelligent type casting in python, Assume dict with key and value being type to cast to and value to cast
 
 
 class MainWindow(Static):
@@ -303,10 +393,12 @@ class TextualConsole(App):
         super().__init__()
 
     def compose(self) -> ComposeResult:
-        yield MainTabs(self.style_logger)
+        main_window = MainWindow(self.style_logger, self.alpacas, self.files, self.chats)
+        settings_window = SettingsWindow(self.style_logger, self.alpacas, self.selected_alpaca_id)
+        yield MainTabs(logger=self.style_logger, chats=main_window, settings=settings_window)
         with Container(id="app-grid"):
             with Container(id="main-container"):
-                yield MainWindow(logger=self.style_logger, alpacas=self.alpacas, files=self.files, chats=self.chats)
+                yield main_window
             with Container(id="side-window"):
                 yield Memgraph()
                 #yield Static("Second", classes="debug")
@@ -462,9 +554,19 @@ class TextualConsole(App):
         self.chats[self.selected_alpaca_id].post_message(UserMessage(prompt))
         self.style_logger.write_line(f"Message posted!")
 
+        time_start_at = time.time()
+        first_token_after = None
+        token_count = 0
         for part in self.alpacas[self.selected_alpaca_id].generate_iterable(prompt=prompt):
+            token_count += 1
+            if first_token_after is None:
+                first_token_after = time.time()
+                self.style_logger.write_line(f"first token after: {time.time() - first_token_after}s")
             chat.post_message(AIResponse(part["response"], self.alpacas[self.selected_alpaca_id].identifier.upper()))
             self.app.query_one(VerticalScroll).scroll_end(force=True)
+            word_count = len(chat.current_line.response.split()) + 1
+            time_elapsed = time.time() - first_token_after
+            #self.style_logger.write_line(f"Token count: {word_count}, first token after: {round(first_token_after - time_start_at, 2)}s, words per second: {word_count / time_elapsed}, tokens per second: {token_count / time_elapsed}, tokens per minute: {token_count / time_elapsed * 60}")
             # TODO: Fix the scrolling issue
         self.generate_running = False
         self.get_widget_by_id("send-button").disabled = False

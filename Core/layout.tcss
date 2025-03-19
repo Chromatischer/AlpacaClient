@@ -55,7 +55,7 @@ Markdown {
     height: 1fr;
     /*width: 100%;*/
 }
-#button-add{
+#button-add {
     min-width: 5%;
     margin: 0;
     padding: 0;
@@ -67,4 +67,25 @@ PlotWidget {
     height: 1fr;
     width: 1fr;
     margin: 0;
+}
+#settings {
+    layout: vertical;
+    border: solid blue;
+    padding: 0;
+    height: auto;
+}
+Container > .settings-row {
+    text-style: bold;
+    text-align: center;
+    content-align: center top;
+    margin: 1;
+    height: auto;
+}
+Static > .settings-label {
+    text-style: bold;
+    text-align: center;
+    content-align: center top;
+    margin: 1;
+    height: auto;
+    background: red;
 }
