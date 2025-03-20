@@ -108,6 +108,7 @@ class Alpacca:
         self._history = previous_history
         self._history_location = history_location
         self.identifier = identifier
+
         self._client = Client()
         if host is not None:
             self._client = Client(host=host)

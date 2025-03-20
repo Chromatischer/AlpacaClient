@@ -81,6 +81,10 @@ Container > .settings-row {
     margin: 1;
     height: auto;
 }
+Container > .add-settings-row {
+    height: auto;
+    margin: 1;
+}
 Static > .settings-label {
     text-style: bold;
     text-align: center;

@@ -1,23 +1,15 @@
 import time
 import typing
-from math import floor
-from random import random
-from typing import Iterator, List, Any
-import psutil
+from typing import Iterator, List, Any, AsyncGenerator
 
 import ollama
+import psutil
 from ollama import GenerateResponse
-from rich.console import RichCast
 from textual import work
-from textual.color import Color
 from textual.containers import VerticalScroll, HorizontalGroup
-from textual.content import Content
 from textual.reactive import reactive, Reactive
-from textual.style import Style
 from textual.validation import Validator, ValidationResult
-from textual.widget import Widget
-from textual.widgets import Static, Input, Log, Tabs, Select, Tab
-from textual_plot import PlotWidget
+from textual.widgets import Static, Input, Log, Tabs, Select, Tab, Button
 
 from Core.Alpacca import Alpacca, separate_thoughts, load_alpacca_from_json, RemoteException, VALID_PARAMETERS
 from Core.FileTree import *
@@ -158,8 +150,8 @@ class ModelSelectScreen(Screen):
 
     def __init__(self, logger: Log):
         for model in ollama.list().models:
-            self.available.append(model._model)
-            logger.write_line(model._model)
+            self.available.append(model.model)
+            logger.write_line(model.model)
 
         super().__init__()
 
@@ -271,6 +263,39 @@ class ChatTabs(Tabs):
         self.query_one(Tabs).add_tab(Tab("+", id="add-tab"))
 
 
+class SettingsHorizontalGroup(Static):
+    _setting: str
+    _identifier: str
+    _min: float
+    _max: float
+    _logger: Log
+
+    def __init__(self, option: str, logger: Log):
+        self._setting = option
+        self._logger = logger
+        self._identifier = " ".join([e.capitalize() for e in option.strip().replace("_", " ").split()])
+        self._min = (lambda x: x["min"])([m for m in VALID_PARAMETERS if m["name"] == option][0])
+        self._max = (lambda x: x["max"])([m for m in VALID_PARAMETERS if m["name"] == option][0])
+        super().__init__(shrink=True)
+
+    def compose(self) -> ComposeResult:
+        yield Static(f"{self._identifier}:")
+        with HorizontalGroup(id=f"{self._setting}-horizontal-group"):
+            yield Input(placeholder=self._identifier, type="number", valid_empty=False, validators=NumberRangeValidator(self._min, self._max), id=f"{self._setting}-input")
+            yield Button("Apply", id=f"{self._setting}-apply", disabled=True)
+
+    def on_mount(self):
+        self._logger.write_line(f"Mounted: {self._setting}")
+        self._logger.write_line(f"Selected: {self._identifier} as Identifier")
+        self._logger.write_line(f"{self._setting}-input")
+
+    def get_setting(self) -> str:
+        return self._setting
+
+    def focus_input(self):
+        self.get_widget_by_id(f"{self._setting}-input").focus()
+
+
 class SettingsWindow(Static):
 
     def __init__(self, logger: Log, alpacas: List[Alpacca], selected_alpaca_id: int):
@@ -281,24 +306,29 @@ class SettingsWindow(Static):
 
     def compose(self) -> ComposeResult:
         with Container(id="settings"):
-            with Container(classes="settings-row"):
-                yield Static("Temperature:", classes="settings-label")
-                with HorizontalGroup():
-                    yield Input(placeholder="Temperature", type="number", valid_empty=False, validators=NumberRangeValidator(0, 2), id="temperature-input")
-                    yield Button("Apply", id="temperature-apply", disabled=True)
-            with Container(classes="settings-row"):
-                yield Static("Frequency Penalty:")
-                with HorizontalGroup():
-                    yield Input(placeholder="Frequency Penalty", type="number", valid_empty=False, validators=NumberRangeValidator(0, 2), id="frequency_penalty-input")
-                    yield Button("Apply", id="frequency_penalty-apply", disabled=True)
-        yield Button("Add", id="add-settings-modifier")
+            #with Container(classes="settings-row"):
+            #    yield SettingsHorizontalGroup("temperature", self.logger)
+            #with Container(classes="settings-row"):
+            #    yield SettingsHorizontalGroup("frequency_penalty", self.logger)
+            with Container(id="add-settings-row", classes="add-settings-row"):
+                yield Button("Add", id="add-settings-modifier")
 
-    def on_mount(self):
-        self.update_placeholder("temperature")
-        self.update_placeholder("frequency_penalty")
+    async def on_mount(self): # async because of race condition
+        added = []
+        for setting in self.alpacas[self.selected_alpaca_id].get_options():
+            if setting not in added:
+                added.append(setting)
+            container = Container(classes="settings-row")
+            x = len([c for c in self.get_widget_by_id("settings").children if "settings-row" in c.classes])
+            await self.get_widget_by_id("settings").mount(container, before=x)
+            await container.mount(SettingsHorizontalGroup(setting, self.logger))
 
-    def on_button_pressed(self, event: Button.Pressed):
-        if event.button.parent.id == "settings":
+        for setting in added:
+            self.update_placeholder(setting)
+
+
+    async def on_button_pressed(self, event: Button.Pressed):
+        if event.button.parent.id == "settings-row":
             self.logger.write_line(f"Button Pressed: {event.button.id}")
             mentions: str = event.button.id.split("-")[0].strip()
             self.logger.write_line(f"Button for: {mentions} pressed!")
@@ -307,6 +337,47 @@ class SettingsWindow(Static):
             self.logger.write_line(f"Changed option: {mentions} for {self.alpacas[self.selected_alpaca_id].identifier} to: {self.alpacas[self.selected_alpaca_id].get_options()[mentions]}!")
             self.clear_input(mentions=mentions)
             self.update_placeholder(mentions=mentions)
+        if event.button.id == "add-settings-modifier":
+            self.logger.write_line("Add settings modifier pressed!")
+            await self.get_widget_by_id("add-settings-row").remove_children()
+            selectable = [m["name"] for m in VALID_PARAMETERS]
+            for child in self.get_widget_by_id("settings").children:
+                if "settings-row" in child.classes:
+                    settings_row: Container = typing.cast(Container, child)
+                    self.logger.write_line(f"Removed settings row: {child.id} with classes: {child.classes}")
+                    for sub_child in settings_row.children:
+                        sub_child: SettingsHorizontalGroup
+                        selectable.remove(sub_child.get_setting())
+
+            horizontal_group = HorizontalGroup(id="new-settings-row")
+            await self.get_widget_by_id("add-settings-row").mount(horizontal_group)
+            await horizontal_group.mount(Select.from_values(selectable, id="new-settings-select"))
+            await horizontal_group.mount(Button("Add", disabled=True, id="add-settings-button"))
+            self.get_widget_by_id("new-settings-select").focus()
+        if event.button.id == "add-settings-button":
+            self.logger.write_line("Add settings button pressed!")
+            value: str = typing.cast(Select, self.get_widget_by_id("new-settings-select")).value
+            self.logger.write_line(f"Selected: [{value}]")
+            new_container: Container = Container(classes="settings-row")
+            x = len([c for c in self.get_widget_by_id("settings").children if "settings-row" in c.classes])
+            await self.get_widget_by_id("settings").mount(new_container, before=x)
+            settings_group = SettingsHorizontalGroup(value, self.logger)
+            await new_container.mount(settings_group)
+            self.update_placeholder(value)
+            await self.get_widget_by_id("add-settings-row").remove_children()
+            await self.get_widget_by_id("add-settings-row").mount(Button("Add", id="add-settings-modifier"))
+            settings_group.focus_input()
+        event.stop()
+
+    @on(Select.Changed)
+    def on_select_changed(self, event: Select.Changed):
+        if event.select.id == "new-settings-select":
+            corresponding_button: Button = typing.cast(Button, self.get_widget_by_id("add-settings-button"))
+            if event.value is not Select.BLANK:
+                corresponding_button.disabled = False
+                corresponding_button.focus()
+            else:
+                corresponding_button.disabled = True
         event.stop()
 
     def on_input_submitted(self, event: Input.Submitted):
@@ -335,10 +406,7 @@ class SettingsWindow(Static):
         typing.cast(Input, self.get_widget_by_id(f"{mentions}-input")).clear()
 
     def update_placeholder(self, mentions: str):
-        typing.cast(Input, self.get_widget_by_id(f"{mentions}-input")).placeholder = f"{mentions.strip().replace('_', ' ').capitalize()}: {self.alpacas[self.selected_alpaca_id].get_option(mentions)}"
-        val = self.alpacas[self.selected_alpaca_id].get_option(mentions)
-        #How do I do intelligent type casting in python, Assume dict with key and value being type to cast to and value to cast
-
+        typing.cast(Input, self.get_widget_by_id(f"{mentions}-input")).placeholder = f"{self.alpacas[self.selected_alpaca_id].get_option(mentions)}"
 
 class MainWindow(Static):
     logger: Log
